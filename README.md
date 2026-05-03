@@ -288,6 +288,69 @@ python scripts/run_visual_mcq_candidate_scoring.py \
   --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_scored.json
 ```
 
+## Vero-Qwen25-7B Model Experiment
+
+`zlab-princeton/Vero-Qwen25-7B` is a Qwen2.5-VL-7B based visual reasoning model trained with RL across charts, OCR, STEM, spatial reasoning, grounding, and counting. Because it keeps the Qwen2.5-VL architecture, it can be tested with the same inference scripts.
+
+Run a quick 500-example test without the EXAMS-V LoRA adapter:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --model zlab-princeton/Vero-Qwen25-7B \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 500 \
+  --num-prompts 1 \
+  --prompt-files prompts/visual_mcq_final_only.txt \
+  --image-variants enhanced \
+  --max-new-tokens 64 \
+  --output outputs/examsv_test_vero_qwen25_7b_enhanced_500.json
+```
+
+If that beats the enhanced Qwen2.5-VL LoRA result on the same subset, run full EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --model zlab-princeton/Vero-Qwen25-7B \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --num-prompts 1 \
+  --prompt-files prompts/visual_mcq_final_only.txt \
+  --image-variants enhanced \
+  --max-new-tokens 64 \
+  --output outputs/examsv_test_vero_qwen25_7b_enhanced_full.json
+```
+
+Optional risky test: apply the EXAMS-V LoRA adapter on top of Vero. This may help or hurt because the adapter was trained on the base Qwen weights:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --model zlab-princeton/Vero-Qwen25-7B \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 500 \
+  --num-prompts 1 \
+  --prompt-files prompts/visual_mcq_final_only.txt \
+  --image-variants enhanced \
+  --max-new-tokens 64 \
+  --output outputs/examsv_test_vero_qwen25_7b_lora_enhanced_500.json
+```
+
+Competition Vero submission:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --model zlab-princeton/Vero-Qwen25-7B \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --num-prompts 1 \
+  --prompt-files prompts/visual_mcq_final_only.txt \
+  --image-variants enhanced \
+  --max-new-tokens 64 \
+  --output outputs/imageclef_visual_mcq_vero_qwen25_7b_enhanced.json
+```
+
 ### Two-Account DeepSeek-OCR Workflow
 
 Use this when DeepSeek-OCR needs a different Transformers version than Qwen2.5-VL.

@@ -121,6 +121,8 @@ def parse_answer(raw_text: str, fallback: str) -> str:
     text = text.translate(FULLWIDTH_TO_ASCII)
 
     patterns = [
+        r"<ANSWER>\s*[\(\[]?\s*([A-E])\b.*?</ANSWER>",
+        r"(?:FINAL\s+ANSWER|FINAL|THE\s+ANSWER)\s*(?:IS|:|-)?\s*[\(\[]?\s*([A-E])\b",
         r"(?:ANSWER|OPTION|CHOICE)\s*(?:IS|:|-)?\s*[\(\[]?\s*([A-E])\b",
         r"^[\s\(\[]*([A-E])[\s\)\].,:;-]*$",
         r"\b([A-E])\b",

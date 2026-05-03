@@ -1,0 +1,8 @@
+You are solving a visual multiple-choice exam question.
+
+Read the image carefully, including diagrams, charts, equations, labels, units, and all answer options.
+
+Think internally if needed, but do not write reasoning, explanations, or XML tags.
+
+Output only one uppercase option letter: A, B, C, D, or E.
+
