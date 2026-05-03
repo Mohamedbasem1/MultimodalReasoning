@@ -122,6 +122,14 @@ The strongest confirmed baseline so far is Qwen2.5-VL-7B with the EXAMS-V LoRA a
 - OCR/detail-focused solving
 - option verification/elimination
 
+The voting script can also run an enhanced image variant and inject external OCR text into the prompt. The safest optional OCR dependency on Lightning is EasyOCR:
+
+```bash
+pip install -r requirements-ocr.txt
+```
+
+PaddleOCR is stronger in many document-style OCR settings and supports very broad multilingual recognition, but it has a heavier install stack. Use it only if the Lightning image supports it cleanly.
+
 Try it first on a labeled EXAMS-V subset:
 
 ```bash
@@ -139,6 +147,27 @@ python scripts/validate_mcq_submission.py \
   --allow-subset
 ```
 
+Stronger OCR + image enhancement version:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --limit 500 \
+  --image-variants original enhanced \
+  --ocr-engine easyocr \
+  --ocr-langs en \
+  --ocr-on-enhanced \
+  --output outputs/examsv_test_qwen25vl7b_voting_ocr_500.json
+```
+
+For multilingual OCR experiments, add language codes supported by EasyOCR. Start small because every added language can download extra OCR weights:
+
+```bash
+--ocr-langs en ar de es fr it pl hr hu ru
+```
+
 If voting beats the single-prompt result, run it on the competition test split:
 
 ```bash
@@ -146,6 +175,7 @@ python scripts/run_visual_mcq_voting.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
   --split test \
   --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --image-variants original enhanced \
   --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting.json
 
 python scripts/validate_mcq_submission.py \
@@ -163,6 +193,20 @@ python scripts/run_visual_mcq_voting.py \
   --split test \
   --adapter outputs/qwen25vl7b-examsv-lora-4k \
   --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting2.json
+```
+
+OCR-enhanced competition run:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --image-variants original enhanced \
+  --ocr-engine easyocr \
+  --ocr-langs en \
+  --ocr-on-enhanced \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting_ocr.json
 ```
 
 ## Zero-Shot Prediction

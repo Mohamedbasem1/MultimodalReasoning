@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 from datasets import load_dataset
+from PIL import Image, ImageEnhance, ImageFilter
 from tqdm import tqdm
 from transformers import AutoProcessor
 
@@ -114,6 +115,48 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use bitsandbytes 4-bit loading. Best on Linux; may not work on Windows.",
     )
+    parser.add_argument(
+        "--image-variants",
+        nargs="+",
+        default=["original"],
+        choices=["original", "enhanced"],
+        help="Run votes over one or more image variants. Use 'original enhanced' for stronger OCR/detail voting.",
+    )
+    parser.add_argument(
+        "--enhance-longest-side",
+        type=int,
+        default=1600,
+        help="Longest-side resize target for the enhanced image variant.",
+    )
+    parser.add_argument(
+        "--ocr-engine",
+        default="none",
+        choices=["none", "easyocr", "paddleocr"],
+        help="Optional external OCR engine. OCR text is injected into every prompt.",
+    )
+    parser.add_argument(
+        "--ocr-langs",
+        nargs="+",
+        default=["en"],
+        help="OCR language codes. EasyOCR accepts multiple codes; PaddleOCR uses the first one.",
+    )
+    parser.add_argument(
+        "--ocr-max-chars",
+        type=int,
+        default=1800,
+        help="Maximum OCR text characters appended to each prompt.",
+    )
+    parser.add_argument(
+        "--ocr-min-confidence",
+        type=float,
+        default=0.20,
+        help="Ignore OCR spans below this confidence when the engine returns confidence.",
+    )
+    parser.add_argument(
+        "--ocr-on-enhanced",
+        action="store_true",
+        help="Run OCR on the enhanced image variant instead of the original image.",
+    )
     return parser.parse_args()
 
 
@@ -147,6 +190,130 @@ def vote_answers(votes: List[Dict[str, str]], fallback: str) -> Tuple[str, Dict[
         if vote["answer_key"] in tied_answers:
             return vote["answer_key"], dict(sorted(counts.items()))
     return fallback, dict(sorted(counts.items()))
+
+
+def resize_longest_side(image: Image.Image, longest_side: int) -> Image.Image:
+    if longest_side <= 0:
+        return image
+    width, height = image.size
+    current_longest = max(width, height)
+    if current_longest == 0 or current_longest == longest_side:
+        return image
+    scale = longest_side / current_longest
+    new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    return image.resize(new_size, Image.Resampling.LANCZOS)
+
+
+def enhance_image(image: Image.Image, longest_side: int) -> Image.Image:
+    enhanced = resize_longest_side(image, longest_side)
+    enhanced = ImageEnhance.Contrast(enhanced).enhance(1.18)
+    enhanced = ImageEnhance.Sharpness(enhanced).enhance(1.35)
+    return enhanced.filter(ImageFilter.UnsharpMask(radius=1.0, percent=90, threshold=3))
+
+
+def build_image_variants(
+    image: Image.Image,
+    requested_variants: Sequence[str],
+    enhance_longest_side: int,
+) -> List[Tuple[str, Image.Image]]:
+    variants: List[Tuple[str, Image.Image]] = []
+    for variant in requested_variants:
+        if variant == "original":
+            variants.append(("original", image))
+        elif variant == "enhanced":
+            variants.append(("enhanced", enhance_image(image, enhance_longest_side)))
+        else:
+            raise ValueError(f"Unsupported image variant: {variant}")
+    return variants
+
+
+def augment_prompt_with_ocr(prompt: str, ocr_text: str) -> str:
+    if not ocr_text:
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "External OCR text extracted from the same image is provided below. "
+        "Use it only as supporting evidence; if it conflicts with the image, trust the image.\n"
+        "<ocr_text>\n"
+        f"{ocr_text}\n"
+        "</ocr_text>"
+    )
+
+
+class OcrRunner:
+    def __init__(
+        self,
+        engine: str,
+        langs: Sequence[str],
+        min_confidence: float,
+        max_chars: int,
+        use_gpu: bool,
+    ) -> None:
+        self.engine = engine
+        self.langs = list(langs)
+        self.min_confidence = min_confidence
+        self.max_chars = max_chars
+        self.reader: Any = None
+
+        if engine == "none":
+            return
+        if engine == "easyocr":
+            import easyocr
+
+            self.reader = easyocr.Reader(self.langs, gpu=use_gpu)
+            return
+        if engine == "paddleocr":
+            from paddleocr import PaddleOCR
+
+            self.reader = PaddleOCR(use_angle_cls=True, lang=self.langs[0])
+            return
+        raise ValueError(f"Unsupported OCR engine: {engine}")
+
+    @property
+    def enabled(self) -> bool:
+        return self.engine != "none" and self.reader is not None
+
+    def extract_text(self, image: Image.Image) -> str:
+        if not self.enabled:
+            return ""
+        if self.engine == "easyocr":
+            return self._extract_easyocr(image)
+        if self.engine == "paddleocr":
+            return self._extract_paddleocr(image)
+        return ""
+
+    def _clip(self, text: str) -> str:
+        text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+        if len(text) <= self.max_chars:
+            return text
+        return text[: self.max_chars].rsplit("\n", 1)[0]
+
+    def _extract_easyocr(self, image: Image.Image) -> str:
+        import numpy as np
+
+        results = self.reader.readtext(np.array(image), paragraph=False)
+        lines = []
+        for _bbox, text, confidence in results:
+            if confidence is None or confidence >= self.min_confidence:
+                lines.append(str(text))
+        return self._clip("\n".join(lines))
+
+    def _extract_paddleocr(self, image: Image.Image) -> str:
+        import numpy as np
+
+        results = self.reader.ocr(np.array(image), cls=True)
+        lines = []
+        for page in results or []:
+            for item in page or []:
+                if not item or len(item) < 2:
+                    continue
+                text_info = item[1]
+                if isinstance(text_info, (list, tuple)) and text_info:
+                    text = str(text_info[0])
+                    confidence = float(text_info[1]) if len(text_info) > 1 else 1.0
+                    if confidence >= self.min_confidence:
+                        lines.append(text)
+        return self._clip("\n".join(lines))
 
 
 def generate_one(
@@ -193,6 +360,22 @@ def main() -> None:
     print("Prompts:")
     for name, _prompt in prompts:
         print(f"- {name}")
+    print(f"Image variants: {', '.join(args.image_variants)}")
+
+    try:
+        ocr_runner = OcrRunner(
+            engine=args.ocr_engine,
+            langs=args.ocr_langs,
+            min_confidence=args.ocr_min_confidence,
+            max_chars=args.ocr_max_chars,
+            use_gpu=torch.cuda.is_available(),
+        )
+    except Exception as exc:
+        print(f"Warning: OCR engine '{args.ocr_engine}' could not be initialized: {exc}")
+        print("Continuing without external OCR.")
+        ocr_runner = OcrRunner("none", [], args.ocr_min_confidence, args.ocr_max_chars, False)
+    if ocr_runner.enabled:
+        print(f"OCR engine: {args.ocr_engine} langs={','.join(args.ocr_langs)}")
 
     print(f"Loading dataset: {args.dataset} [{args.split}]")
     dataset = load_dataset(args.dataset, split=args.split)
@@ -231,24 +414,34 @@ def main() -> None:
         for row in tqdm(dataset, desc="Voting"):
             question_id = str(row[id_column])
             image = normalize_image(row[image_column])
+            image_variants = build_image_variants(
+                image,
+                requested_variants=args.image_variants,
+                enhance_longest_side=args.enhance_longest_side,
+            )
+            ocr_image = image_variants[-1][1] if args.ocr_on_enhanced else image
+            ocr_text = ocr_runner.extract_text(ocr_image)
             votes = []
 
-            for prompt_name, prompt in prompts:
-                answer_key, raw_text = generate_one(
-                    model=model,
-                    processor=processor,
-                    image=image,
-                    prompt=prompt,
-                    max_new_tokens=args.max_new_tokens,
-                    fallback_answer=args.fallback_answer,
-                )
-                votes.append(
-                    {
-                        "prompt": prompt_name,
-                        "answer_key": answer_key,
-                        "raw_text": raw_text,
-                    }
-                )
+            for variant_name, variant_image in image_variants:
+                for prompt_name, prompt in prompts:
+                    final_prompt = augment_prompt_with_ocr(prompt, ocr_text)
+                    answer_key, raw_text = generate_one(
+                        model=model,
+                        processor=processor,
+                        image=variant_image,
+                        prompt=final_prompt,
+                        max_new_tokens=args.max_new_tokens,
+                        fallback_answer=args.fallback_answer,
+                    )
+                    votes.append(
+                        {
+                            "variant": variant_name,
+                            "prompt": prompt_name,
+                            "answer_key": answer_key,
+                            "raw_text": raw_text,
+                        }
+                    )
 
             voted_answer, vote_counts = vote_answers(votes, args.fallback_answer)
             predictions.append({"question_id": question_id, "answer_key": voted_answer})
@@ -257,6 +450,7 @@ def main() -> None:
                 "question_id": question_id,
                 "answer_key": voted_answer,
                 "vote_counts": vote_counts,
+                "ocr_text": ocr_text,
                 "votes": votes,
             }
             if has_gold:
@@ -278,4 +472,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
