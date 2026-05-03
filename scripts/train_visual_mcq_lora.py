@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import torch
 from datasets import Dataset, load_dataset
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from PIL import Image
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -39,6 +39,11 @@ def parse_args() -> argparse.Namespace:
         description="LoRA/QLoRA fine-tune Qwen2.5-VL on labeled Visual MCQ data."
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument(
+        "--init-adapter",
+        default=None,
+        help="Optional existing PEFT/LoRA adapter to continue training from.",
+    )
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--train-split", default="train")
     parser.add_argument("--eval-split", default="validation")
@@ -52,6 +57,36 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="Optional values for the dataset 'type' column, e.g. image_text text.",
+    )
+    parser.add_argument(
+        "--include-language",
+        nargs="+",
+        default=None,
+        help="Keep rows whose language column is one of these values.",
+    )
+    parser.add_argument(
+        "--include-grade",
+        nargs="+",
+        default=None,
+        help="Keep rows whose grade column is one of these values.",
+    )
+    parser.add_argument(
+        "--include-binary-columns",
+        nargs="+",
+        default=None,
+        help="Keep rows where any listed metadata column is truthy, e.g. graph table figure.",
+    )
+    parser.add_argument(
+        "--include-subject-contains",
+        nargs="+",
+        default=None,
+        help="Keep rows whose subject contains any of these case-insensitive substrings.",
+    )
+    parser.add_argument(
+        "--weak-filter-mode",
+        default="or",
+        choices=["or", "and"],
+        help="Combine include filters with OR for weak-case targeting or AND for narrow subsets.",
     )
     parser.add_argument("--train-limit", type=int, default=None)
     parser.add_argument("--eval-limit", type=int, default=300)
@@ -129,10 +164,48 @@ def normalize_answer(value: Any) -> Optional[str]:
     return match.group(0) if match else None
 
 
+def truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return False
+
+
+def weak_filter_matches(row: Dict[str, Any], args: argparse.Namespace) -> bool:
+    checks = []
+    if args.include_language:
+        checks.append("language" in row and str(row["language"]) in set(args.include_language))
+    if args.include_grade:
+        checks.append("grade" in row and str(row["grade"]) in set(str(grade) for grade in args.include_grade))
+    if args.include_binary_columns:
+        checks.append(any(column in row and truthy(row[column]) for column in args.include_binary_columns))
+    if args.include_subject_contains:
+        subject = str(row.get("subject", "")).lower()
+        checks.append(any(fragment.lower() in subject for fragment in args.include_subject_contains))
+    if not checks:
+        return True
+    if args.weak_filter_mode == "and":
+        return all(checks)
+    return any(checks)
+
+
 def filter_dataset(dataset: Dataset, args: argparse.Namespace) -> Dataset:
     if args.filter_type:
         allowed_types = set(args.filter_type)
         dataset = dataset.filter(lambda row: row.get("type") in allowed_types)
+    has_weak_filters = any(
+        [
+            args.include_language,
+            args.include_grade,
+            args.include_binary_columns,
+            args.include_subject_contains,
+        ]
+    )
+    if has_weak_filters:
+        dataset = dataset.filter(lambda row: weak_filter_matches(row, args))
     dataset = dataset.filter(lambda row: normalize_answer(row.get(args.answer_column)) in ANSWER_KEYS)
     return dataset
 
@@ -253,15 +326,18 @@ def load_model(args: argparse.Namespace) -> Qwen2_5_VLForConditionalGeneration:
             use_gradient_checkpointing=args.gradient_checkpointing,
         )
 
-    lora_config = LoraConfig(
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        bias="none",
-        task_type="CAUSAL_LM",
-        target_modules=args.target_modules,
-    )
-    model = get_peft_model(model, lora_config)
+    if args.init_adapter:
+        model = PeftModel.from_pretrained(model, args.init_adapter, is_trainable=True)
+    else:
+        lora_config = LoraConfig(
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=args.target_modules,
+        )
+        model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
     return model
 

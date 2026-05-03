@@ -114,6 +114,75 @@ python scripts/validate_mcq_submission.py \
 
 Submit `outputs/visual_mcq_qwen25vl7b_lora.json`.
 
+## Second-Stage Weak-Case Fine-Tuning
+
+After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:
+
+```bash
+python scripts/train_visual_mcq_lora.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --init-adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --prompt-file prompts/visual_mcq_weakcase_prompt.txt \
+  --include-language Arabic Urdu \
+  --include-grade 9 10 11 \
+  --include-binary-columns graph table figure \
+  --weak-filter-mode or \
+  --max-steps 300 \
+  --learning-rate 5e-5 \
+  --eval-limit 300 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --output-dir outputs/qwen25vl7b-examsv-lora-weakstage
+```
+
+Optional narrower image-text-only variant:
+
+```bash
+python scripts/train_visual_mcq_lora.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --init-adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --prompt-file prompts/visual_mcq_weakcase_prompt.txt \
+  --filter-type image_text \
+  --max-steps 200 \
+  --learning-rate 5e-5 \
+  --eval-limit 300 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --output-dir outputs/qwen25vl7b-examsv-lora-imagetext-stage
+```
+
+Evaluate the weak-stage adapter with the current best enhanced direct pipeline:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-weakstage \
+  --num-prompts 1 \
+  --image-variants enhanced \
+  --output outputs/examsv_test_qwen25vl7b_weakstage_enhanced_full.json
+```
+
+If it beats `52.34%`, generate competition output:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-weakstage \
+  --num-prompts 1 \
+  --image-variants enhanced \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_weakstage_enhanced.json
+```
+
 ## Voting Inference Enhancement
 
 The strongest confirmed baseline so far is Qwen2.5-VL-7B with the EXAMS-V LoRA adapter. To improve it without more training, use multi-prompt voting. This runs three prompt variants per image:

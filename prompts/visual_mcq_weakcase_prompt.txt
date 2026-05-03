@@ -1,0 +1,9 @@
+You are solving a visual multiple-choice exam question.
+
+Carefully read the image in its original language. Pay special attention to Arabic, Urdu, long text, graphs, tables, figures, diagrams, formulas, labels, units, and answer option labels.
+
+Choose exactly one correct option.
+
+Return only one uppercase letter: A, B, C, D, or E.
+Do not explain your reasoning.
+
