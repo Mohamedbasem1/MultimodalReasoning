@@ -1,0 +1,456 @@
+import argparse
+import json
+import math
+import random
+import re
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+import torch
+from datasets import Dataset, load_dataset
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from PIL import Image
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from transformers import (
+    AutoProcessor,
+    BitsAndBytesConfig,
+    Qwen2_5_VLForConditionalGeneration,
+    get_cosine_schedule_with_warmup,
+)
+
+
+ANSWER_KEYS = {"A", "B", "C", "D", "E"}
+DEFAULT_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
+DEFAULT_DATASET = "MBZUAI/EXAMS-V"
+DEFAULT_PROMPT = """You are solving a multiple-choice exam question from an image.
+
+Read the full image carefully, including all question text, answer options, diagrams, charts, tables, labels, formulas, and units.
+
+Choose exactly one correct option.
+
+Return only one uppercase letter: A, B, C, D, or E.
+Do not explain your reasoning."""
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="LoRA/QLoRA fine-tune Qwen2.5-VL on labeled Visual MCQ data."
+    )
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--dataset", default=DEFAULT_DATASET)
+    parser.add_argument("--train-split", default="train")
+    parser.add_argument("--eval-split", default="validation")
+    parser.add_argument("--output-dir", default="outputs/qwen25vl7b-examsv-lora")
+    parser.add_argument("--prompt-file", default="prompts/visual_mcq_prompt.txt")
+    parser.add_argument("--id-column", default="auto")
+    parser.add_argument("--image-column", default="auto")
+    parser.add_argument("--answer-column", default="answer_key")
+    parser.add_argument(
+        "--filter-type",
+        nargs="+",
+        default=None,
+        help="Optional values for the dataset 'type' column, e.g. image_text text.",
+    )
+    parser.add_argument("--train-limit", type=int, default=None)
+    parser.add_argument("--eval-limit", type=int, default=300)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--num-epochs", type=float, default=1.0)
+    parser.add_argument("--max-steps", type=int, default=None)
+    parser.add_argument("--batch-size", type=int, default=1)
+    parser.add_argument("--grad-accum-steps", type=int, default=8)
+    parser.add_argument("--learning-rate", type=float, default=2e-4)
+    parser.add_argument("--weight-decay", type=float, default=0.0)
+    parser.add_argument("--warmup-ratio", type=float, default=0.03)
+    parser.add_argument("--lora-r", type=int, default=16)
+    parser.add_argument("--lora-alpha", type=int, default=32)
+    parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument(
+        "--target-modules",
+        nargs="+",
+        default=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    )
+    parser.add_argument("--max-new-tokens", type=int, default=8)
+    parser.add_argument("--max-pixels", type=int, default=1280 * 28 * 28)
+    parser.add_argument("--min-pixels", type=int, default=256 * 28 * 28)
+    parser.add_argument("--logging-steps", type=int, default=10)
+    parser.add_argument("--eval-steps", type=int, default=200)
+    parser.add_argument("--save-steps", type=int, default=200)
+    parser.add_argument("--eval-generate-limit", type=int, default=100)
+    parser.add_argument("--gradient-checkpointing", action="store_true")
+    parser.add_argument(
+        "--load-in-4bit",
+        action="store_true",
+        help="Recommended on Lightning for single-GPU QLoRA.",
+    )
+    return parser.parse_args()
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def load_prompt(path: str) -> str:
+    prompt_path = Path(path)
+    if prompt_path.exists():
+        return prompt_path.read_text(encoding="utf-8").strip()
+    return DEFAULT_PROMPT
+
+
+def pick_column(columns: Sequence[str], requested: str, candidates: Iterable[str]) -> str:
+    if requested != "auto":
+        if requested not in columns:
+            raise ValueError(f"Column '{requested}' not found. Available: {list(columns)}")
+        return requested
+    for candidate in candidates:
+        if candidate in columns:
+            return candidate
+    raise ValueError(f"Could not infer column. Available: {list(columns)}")
+
+
+def normalize_image(value: Any) -> Image.Image:
+    if isinstance(value, Image.Image):
+        return value.convert("RGB")
+    if isinstance(value, dict) and "bytes" in value:
+        from io import BytesIO
+
+        return Image.open(BytesIO(value["bytes"])).convert("RGB")
+    if isinstance(value, (str, Path)):
+        return Image.open(value).convert("RGB")
+    raise TypeError(f"Unsupported image value type: {type(value)!r}")
+
+
+def normalize_answer(value: Any) -> Optional[str]:
+    answer = str(value).strip().upper()
+    match = re.search(r"[A-E]", answer)
+    return match.group(0) if match else None
+
+
+def filter_dataset(dataset: Dataset, args: argparse.Namespace) -> Dataset:
+    if args.filter_type:
+        allowed_types = set(args.filter_type)
+        dataset = dataset.filter(lambda row: row.get("type") in allowed_types)
+    dataset = dataset.filter(lambda row: normalize_answer(row.get(args.answer_column)) in ANSWER_KEYS)
+    return dataset
+
+
+def maybe_limit(dataset: Dataset, limit: Optional[int]) -> Dataset:
+    if limit is None:
+        return dataset
+    return dataset.select(range(min(limit, len(dataset))))
+
+
+def build_messages(image: Image.Image, prompt: str, answer: Optional[str]) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+    if answer is not None:
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
+    return messages
+
+
+class VisualMcqCollator:
+    def __init__(self, processor: AutoProcessor, prompt: str, image_column: str, answer_column: str):
+        self.processor = processor
+        self.prompt = prompt
+        self.image_column = image_column
+        self.answer_column = answer_column
+
+    def __call__(self, rows: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
+        images: List[Image.Image] = []
+        full_texts: List[str] = []
+        prompt_texts: List[str] = []
+
+        for row in rows:
+            image = normalize_image(row[self.image_column])
+            answer = normalize_answer(row[self.answer_column])
+            if answer is None:
+                raise ValueError(f"Invalid answer: {row.get(self.answer_column)!r}")
+            images.append(image)
+            full_texts.append(
+                self.processor.apply_chat_template(
+                    build_messages(image, self.prompt, answer),
+                    tokenize=False,
+                    add_generation_prompt=False,
+                )
+            )
+            prompt_texts.append(
+                self.processor.apply_chat_template(
+                    build_messages(image, self.prompt, None),
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            )
+
+        full_inputs = self.processor(
+            text=full_texts,
+            images=images,
+            padding=True,
+            return_tensors="pt",
+        )
+        prompt_inputs = self.processor(
+            text=prompt_texts,
+            images=images,
+            padding=True,
+            return_tensors="pt",
+        )
+
+        labels = full_inputs["input_ids"].clone()
+        prompt_lengths = prompt_inputs["attention_mask"].sum(dim=1)
+        for index, prompt_length in enumerate(prompt_lengths.tolist()):
+            labels[index, :prompt_length] = -100
+
+        pad_token_id = self.processor.tokenizer.pad_token_id
+        if pad_token_id is not None:
+            labels[full_inputs["input_ids"] == pad_token_id] = -100
+        full_inputs["labels"] = labels
+        return full_inputs
+
+
+def parse_answer(raw_text: str, fallback: str = "A") -> str:
+    text = raw_text.strip().upper()
+    for pattern in [
+        r"(?:ANSWER|OPTION|CHOICE)\s*(?:IS|:|-)?\s*[\(\[]?\s*([A-E])\b",
+        r"^[\s\(\[]*([A-E])[\s\)\].,:;-]*$",
+        r"\b([A-E])\b",
+    ]:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    return fallback
+
+
+def load_model(args: argparse.Namespace) -> Qwen2_5_VLForConditionalGeneration:
+    kwargs: Dict[str, Any] = {"torch_dtype": torch.bfloat16 if torch.cuda.is_available() else torch.float32}
+    if args.load_in_4bit:
+        kwargs["device_map"] = "auto"
+        kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(args.model, **kwargs)
+    if not args.load_in_4bit and torch.cuda.is_available():
+        model.to("cuda")
+
+    model.config.use_cache = False
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+    if args.load_in_4bit:
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.gradient_checkpointing,
+        )
+
+    lora_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        bias="none",
+        task_type="CAUSAL_LM",
+        target_modules=args.target_modules,
+    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
+    return model
+
+
+def move_batch_to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
+    return {key: value.to(device) if torch.is_tensor(value) else value for key, value in batch.items()}
+
+
+def model_device(model: torch.nn.Module) -> torch.device:
+    return next(model.parameters()).device
+
+
+@torch.no_grad()
+def evaluate_generation(
+    model: torch.nn.Module,
+    processor: AutoProcessor,
+    dataset: Dataset,
+    prompt: str,
+    image_column: str,
+    answer_column: str,
+    limit: int,
+    max_new_tokens: int,
+) -> Dict[str, float]:
+    model.eval()
+    total = min(limit, len(dataset))
+    correct = 0
+
+    for row in tqdm(dataset.select(range(total)), desc="Eval generation", leave=False):
+        image = normalize_image(row[image_column])
+        expected = normalize_answer(row[answer_column])
+        if expected is None:
+            continue
+        messages = build_messages(image, prompt, None)
+        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text], images=[image], padding=True, return_tensors="pt")
+        inputs = move_batch_to_device(inputs, model_device(model))
+        generated_ids = model.generate(
+            **inputs,
+            do_sample=False,
+            max_new_tokens=max_new_tokens,
+        )
+        trimmed_ids = [
+            output_ids[len(input_ids) :]
+            for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)
+        ]
+        raw_text = processor.batch_decode(
+            trimmed_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )[0]
+        correct += int(parse_answer(raw_text) == expected)
+
+    model.train()
+    return {"accuracy": correct / total if total else 0.0, "count": float(total)}
+
+
+def save_adapter(model: torch.nn.Module, processor: AutoProcessor, output_dir: Path, step: int) -> None:
+    checkpoint_dir = output_dir / f"checkpoint-{step}"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(checkpoint_dir)
+    processor.save_pretrained(checkpoint_dir)
+
+
+def main() -> None:
+    args = parse_args()
+    set_seed(args.seed)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = load_prompt(args.prompt_file)
+    processor = AutoProcessor.from_pretrained(
+        args.model,
+        min_pixels=args.min_pixels,
+        max_pixels=args.max_pixels,
+    )
+
+    print(f"Loading train split: {args.dataset} [{args.train_split}]")
+    train_dataset = load_dataset(args.dataset, split=args.train_split)
+    eval_dataset = load_dataset(args.dataset, split=args.eval_split)
+
+    id_column = pick_column(train_dataset.column_names, args.id_column, ["question_id", "sample_id", "id"])
+    image_column = pick_column(train_dataset.column_names, args.image_column, ["image", "image_id"])
+    print(f"ID column: {id_column}")
+    print(f"Image column: {image_column}")
+
+    train_dataset = maybe_limit(filter_dataset(train_dataset, args), args.train_limit)
+    eval_dataset = maybe_limit(filter_dataset(eval_dataset, args), args.eval_limit)
+    print(f"Train rows: {len(train_dataset)}")
+    print(f"Eval rows: {len(eval_dataset)}")
+
+    model = load_model(args)
+    collator = VisualMcqCollator(processor, prompt, image_column, args.answer_column)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collator,
+        num_workers=0,
+    )
+
+    updates_per_epoch = math.ceil(len(train_loader) / args.grad_accum_steps)
+    total_steps = int(math.ceil(args.num_epochs * updates_per_epoch))
+    if args.max_steps is not None:
+        total_steps = min(total_steps, args.max_steps)
+    warmup_steps = max(1, int(total_steps * args.warmup_ratio))
+
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
+    )
+
+    training_args = vars(args)
+    training_args.update(
+        {
+            "train_rows": len(train_dataset),
+            "eval_rows": len(eval_dataset),
+            "total_steps": total_steps,
+            "warmup_steps": warmup_steps,
+        }
+    )
+    (output_dir / "training_args.json").write_text(
+        json.dumps(training_args, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    model.train()
+    global_step = 0
+    micro_step = 0
+    running_loss = 0.0
+    optimizer.zero_grad(set_to_none=True)
+
+    progress = tqdm(total=total_steps, desc="Training")
+    while global_step < total_steps:
+        for batch_index, batch in enumerate(train_loader):
+            batch = move_batch_to_device(batch, model_device(model))
+            outputs = model(**batch)
+            loss = outputs.loss / args.grad_accum_steps
+            loss.backward()
+            running_loss += loss.item() * args.grad_accum_steps
+            micro_step += 1
+
+            is_last_batch = batch_index == len(train_loader) - 1
+            should_step = micro_step % args.grad_accum_steps == 0 or is_last_batch
+            if should_step:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+                progress.update(1)
+
+                if global_step % args.logging_steps == 0:
+                    avg_loss = running_loss / args.logging_steps
+                    running_loss = 0.0
+                    progress.write(f"step={global_step} loss={avg_loss:.4f}")
+
+                if global_step % args.eval_steps == 0 and len(eval_dataset):
+                    metrics = evaluate_generation(
+                        model=model,
+                        processor=processor,
+                        dataset=eval_dataset,
+                        prompt=prompt,
+                        image_column=image_column,
+                        answer_column=args.answer_column,
+                        limit=args.eval_generate_limit,
+                        max_new_tokens=args.max_new_tokens,
+                    )
+                    progress.write(
+                        f"step={global_step} eval_accuracy={metrics['accuracy']:.4f} "
+                        f"n={int(metrics['count'])}"
+                    )
+
+                if global_step % args.save_steps == 0:
+                    save_adapter(model, processor, output_dir, global_step)
+
+                if global_step >= total_steps:
+                    break
+        else:
+            continue
+        break
+
+    progress.close()
+    save_adapter(model, processor, output_dir, global_step)
+    model.save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
+    print(f"Saved final LoRA adapter: {output_dir}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,9 @@
+You are solving a multiple-choice exam question from an image.
+
+Read the full image carefully, including all question text, answer options, diagrams, charts, tables, labels, formulas, and units.
+
+Choose exactly one correct option.
+
+Return only one uppercase letter: A, B, C, D, or E.
+Do not explain your reasoning.
+
