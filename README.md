@@ -130,6 +130,14 @@ pip install -r requirements-ocr.txt
 
 PaddleOCR is stronger in many document-style OCR settings and supports very broad multilingual recognition, but it has a heavier install stack. Use it only if the Lightning image supports it cleanly.
 
+DeepSeek-OCR is also supported as a stronger VLM-style OCR extractor. It is a 3B MIT-licensed Hugging Face model, so it is heavier than EasyOCR but can produce richer document Markdown:
+
+```bash
+pip install -r requirements-deepseek-ocr.txt
+```
+
+If your environment has FlashAttention installed, you can use `--deepseek-ocr-attn-implementation flash_attention_2`; otherwise keep the default `sdpa`.
+
 Try it first on a labeled EXAMS-V subset:
 
 ```bash
@@ -208,6 +216,22 @@ python scripts/run_visual_mcq_voting.py \
   --ocr-on-enhanced \
   --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting_ocr.json
 ```
+
+DeepSeek-OCR enhanced run:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --image-variants original enhanced \
+  --ocr-engine deepseek \
+  --ocr-on-enhanced \
+  --ocr-max-chars 2200 \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting_deepseek_ocr.json
+```
+
+If memory gets tight, add `--load-in-4bit` for Qwen or `--ocr-cpu` for the OCR model. DeepSeek-OCR on CPU is much slower, so prefer GPU when memory allows.
 
 ## Zero-Shot Prediction
 

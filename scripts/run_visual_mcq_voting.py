@@ -1,5 +1,6 @@
 import argparse
 import json
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -131,7 +132,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ocr-engine",
         default="none",
-        choices=["none", "easyocr", "paddleocr"],
+        choices=["none", "easyocr", "paddleocr", "deepseek"],
         help="Optional external OCR engine. OCR text is injected into every prompt.",
     )
     parser.add_argument(
@@ -161,6 +162,26 @@ def parse_args() -> argparse.Namespace:
         "--ocr-cpu",
         action="store_true",
         help="Run OCR on CPU even when CUDA is available. Useful if OCR competes with the VLM for GPU memory.",
+    )
+    parser.add_argument("--deepseek-ocr-model", default="deepseek-ai/DeepSeek-OCR")
+    parser.add_argument(
+        "--deepseek-ocr-attn-implementation",
+        default="sdpa",
+        choices=["flash_attention_2", "sdpa", "eager"],
+        help="Attention implementation for DeepSeek-OCR. Use flash_attention_2 only if flash-attn is installed.",
+    )
+    parser.add_argument("--deepseek-ocr-base-size", type=int, default=1024)
+    parser.add_argument("--deepseek-ocr-image-size", type=int, default=640)
+    parser.add_argument("--deepseek-ocr-output-dir", default="outputs/deepseek_ocr")
+    parser.add_argument(
+        "--deepseek-ocr-no-crop",
+        action="store_true",
+        help="Disable DeepSeek-OCR crop mode. Crop mode is usually better for dense document images.",
+    )
+    parser.add_argument(
+        "--deepseek-ocr-test-compress",
+        action="store_true",
+        help="Enable DeepSeek-OCR test_compress mode from the model card example.",
     )
     return parser.parse_args()
 
@@ -253,12 +274,26 @@ class OcrRunner:
         min_confidence: float,
         max_chars: int,
         use_gpu: bool,
+        deepseek_model: str = "deepseek-ai/DeepSeek-OCR",
+        deepseek_attn_implementation: str = "sdpa",
+        deepseek_base_size: int = 1024,
+        deepseek_image_size: int = 640,
+        deepseek_output_dir: str = "outputs/deepseek_ocr",
+        deepseek_crop_mode: bool = True,
+        deepseek_test_compress: bool = False,
     ) -> None:
         self.engine = engine
         self.langs = list(langs)
         self.min_confidence = min_confidence
         self.max_chars = max_chars
         self.reader: Any = None
+        self.tokenizer: Any = None
+        self.deepseek_base_size = deepseek_base_size
+        self.deepseek_image_size = deepseek_image_size
+        self.deepseek_output_dir = Path(deepseek_output_dir)
+        self.deepseek_crop_mode = deepseek_crop_mode
+        self.deepseek_test_compress = deepseek_test_compress
+        self.use_gpu = use_gpu
 
         if engine == "none":
             return
@@ -271,6 +306,21 @@ class OcrRunner:
             from paddleocr import PaddleOCR
 
             self.reader = PaddleOCR(use_angle_cls=True, lang=self.langs[0])
+            return
+        if engine == "deepseek":
+            from transformers import AutoModel, AutoTokenizer
+
+            self.deepseek_output_dir.mkdir(parents=True, exist_ok=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(deepseek_model, trust_remote_code=True)
+            self.reader = AutoModel.from_pretrained(
+                deepseek_model,
+                _attn_implementation=deepseek_attn_implementation,
+                trust_remote_code=True,
+                use_safetensors=True,
+            )
+            self.reader = self.reader.eval()
+            if use_gpu:
+                self.reader = self.reader.cuda().to(torch.bfloat16)
             return
         raise ValueError(f"Unsupported OCR engine: {engine}")
 
@@ -285,6 +335,8 @@ class OcrRunner:
             return self._extract_easyocr(image)
         if self.engine == "paddleocr":
             return self._extract_paddleocr(image)
+        if self.engine == "deepseek":
+            return self._extract_deepseek(image)
         return ""
 
     def _clip(self, text: str) -> str:
@@ -319,6 +371,25 @@ class OcrRunner:
                     if confidence >= self.min_confidence:
                         lines.append(text)
         return self._clip("\n".join(lines))
+
+    def _extract_deepseek(self, image: Image.Image) -> str:
+        prompt = "<image>\n<|grounding|>Convert the document to markdown. "
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as image_file:
+            image.save(image_file.name, format="JPEG", quality=95)
+            result = self.reader.infer(
+                self.tokenizer,
+                prompt=prompt,
+                image_file=image_file.name,
+                output_path=str(self.deepseek_output_dir),
+                base_size=self.deepseek_base_size,
+                image_size=self.deepseek_image_size,
+                crop_mode=self.deepseek_crop_mode,
+                save_results=False,
+                test_compress=self.deepseek_test_compress,
+            )
+        if result is None:
+            return ""
+        return self._clip(str(result))
 
 
 def generate_one(
@@ -374,6 +445,13 @@ def main() -> None:
             min_confidence=args.ocr_min_confidence,
             max_chars=args.ocr_max_chars,
             use_gpu=torch.cuda.is_available() and not args.ocr_cpu,
+            deepseek_model=args.deepseek_ocr_model,
+            deepseek_attn_implementation=args.deepseek_ocr_attn_implementation,
+            deepseek_base_size=args.deepseek_ocr_base_size,
+            deepseek_image_size=args.deepseek_ocr_image_size,
+            deepseek_output_dir=args.deepseek_ocr_output_dir,
+            deepseek_crop_mode=not args.deepseek_ocr_no_crop,
+            deepseek_test_compress=args.deepseek_ocr_test_compress,
         )
     except Exception as exc:
         print(f"Warning: OCR engine '{args.ocr_engine}' could not be initialized: {exc}")

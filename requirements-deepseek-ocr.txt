@@ -1,0 +1,7 @@
+# Optional dependencies for --ocr-engine deepseek.
+# DeepSeek-OCR itself is loaded from Hugging Face with trust_remote_code=True.
+
+addict
+easydict
+einops
+
