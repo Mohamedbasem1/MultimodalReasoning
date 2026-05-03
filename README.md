@@ -114,6 +114,79 @@ python scripts/validate_mcq_submission.py \
 
 Submit `outputs/visual_mcq_qwen25vl7b_lora.json`.
 
+## Qwen3-VL-8B-Thinking Fine-Tuning
+
+`Qwen/Qwen3-VL-8B-Thinking` is a stronger Normal-category experiment than the Tiny Qwen2.5-VL-7B baseline. It needs the newer Qwen3-VL Transformers code, so use a fresh Lightning Studio or reinstall Transformers before running it.
+
+Install the Qwen3-VL dependencies:
+
+```bash
+pip install -r requirements-qwen3vl.txt
+```
+
+Run a small QLoRA smoke test first:
+
+```bash
+python scripts/train_visual_mcq_lora_qwen3vl.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --prompt-file prompts/visual_mcq_final_only.txt \
+  --train-limit 200 \
+  --eval-limit 50 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --output-dir outputs/qwen3vl8b-thinking-examsv-lora-smoke
+```
+
+If the smoke run works, start with a 300-step run and compare against the current Qwen2.5-VL best score:
+
+```bash
+python scripts/train_visual_mcq_lora_qwen3vl.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --prompt-file prompts/visual_mcq_final_only.txt \
+  --max-steps 300 \
+  --learning-rate 1e-4 \
+  --eval-limit 300 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --output-dir outputs/qwen3vl8b-thinking-examsv-lora-300
+```
+
+Evaluate it on the labeled EXAMS-V test split using the same enhanced-image setting that gave the best Qwen2.5-VL result:
+
+```bash
+python scripts/run_visual_mcq_qwen3vl.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen3vl8b-thinking-examsv-lora-300 \
+  --image-variant enhanced \
+  --output outputs/examsv_test_qwen3vl8b_thinking_lora_300_enhanced_full.json
+```
+
+Only run the competition test if it beats the current best EXAMS-V test score:
+
+```bash
+python scripts/run_visual_mcq_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen3vl8b-thinking-examsv-lora-300 \
+  --image-variant enhanced \
+  --output outputs/imageclef_visual_mcq_qwen3vl8b_thinking_lora_enhanced.json
+
+python scripts/validate_mcq_submission.py \
+  outputs/imageclef_visual_mcq_qwen3vl8b_thinking_lora_enhanced.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test
+```
+
 ## Second-Stage Weak-Case Fine-Tuning
 
 After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:
