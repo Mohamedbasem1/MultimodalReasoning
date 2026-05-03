@@ -114,6 +114,57 @@ python scripts/validate_mcq_submission.py \
 
 Submit `outputs/visual_mcq_qwen25vl7b_lora.json`.
 
+## Voting Inference Enhancement
+
+The strongest confirmed baseline so far is Qwen2.5-VL-7B with the EXAMS-V LoRA adapter. To improve it without more training, use multi-prompt voting. This runs three prompt variants per image:
+
+- direct full-image solving
+- OCR/detail-focused solving
+- option verification/elimination
+
+Try it first on a labeled EXAMS-V subset:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --limit 500 \
+  --output outputs/examsv_test_qwen25vl7b_voting_500.json
+
+python scripts/validate_mcq_submission.py \
+  outputs/examsv_test_qwen25vl7b_voting_500.json \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --allow-subset
+```
+
+If voting beats the single-prompt result, run it on the competition test split:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting.json
+
+python scripts/validate_mcq_submission.py \
+  outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test
+```
+
+For a faster version, use only two prompts:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --num-prompts 2 \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting2.json
+```
+
 ## Zero-Shot Prediction
 
 If you only want zero-shot prediction without fine-tuning:

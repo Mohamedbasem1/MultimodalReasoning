@@ -1,0 +1,9 @@
+You are solving a multiple-choice exam question from an image.
+
+First, carefully read every visible word, number, option label, formula, table cell, chart axis, diagram label, and unit in the image.
+
+Use the visual evidence to choose the best answer option.
+
+Return only one uppercase letter: A, B, C, D, or E.
+Do not explain your reasoning.
+

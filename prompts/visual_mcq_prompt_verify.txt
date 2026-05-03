@@ -1,0 +1,7 @@
+You are solving a multiple-choice exam question from an image.
+
+Read the question and all answer options from the image. Compare the options against the image evidence, eliminate wrong options, and choose the most correct remaining option.
+
+Return only one uppercase letter: A, B, C, D, or E.
+Do not explain your reasoning.
+
