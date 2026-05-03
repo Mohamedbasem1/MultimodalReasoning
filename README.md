@@ -351,6 +351,50 @@ python scripts/run_visual_mcq_voting.py \
   --output outputs/imageclef_visual_mcq_vero_qwen25_7b_enhanced.json
 ```
 
+## InternVL3-8B Model Experiment
+
+`OpenGVLab/InternVL3-8B-hf` is the Hugging Face Transformers implementation of InternVL3-8B. It uses a Qwen2.5-7B language component with InternViT vision encoder and is Apache-2.0 licensed.
+
+Test on 500 EXAMS-V examples first:
+
+```bash
+python scripts/run_visual_mcq_internvl3.py \
+  --model OpenGVLab/InternVL3-8B-hf \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 500 \
+  --image-variant enhanced \
+  --output outputs/examsv_test_internvl3_8b_enhanced_500.json
+```
+
+If memory is tight, add:
+
+```bash
+--load-in-4bit
+```
+
+If it beats the Qwen2.5-VL-7B LoRA enhanced result, run full EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_internvl3.py \
+  --model OpenGVLab/InternVL3-8B-hf \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --image-variant enhanced \
+  --output outputs/examsv_test_internvl3_8b_enhanced_full.json
+```
+
+Competition InternVL3 submission:
+
+```bash
+python scripts/run_visual_mcq_internvl3.py \
+  --model OpenGVLab/InternVL3-8B-hf \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --image-variant enhanced \
+  --output outputs/imageclef_visual_mcq_internvl3_8b_enhanced.json
+```
+
 ### Two-Account DeepSeek-OCR Workflow
 
 Use this when DeepSeek-OCR needs a different Transformers version than Qwen2.5-VL.
