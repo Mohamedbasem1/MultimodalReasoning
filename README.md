@@ -233,6 +233,61 @@ python scripts/run_visual_mcq_voting.py \
 
 If memory gets tight, add `--load-in-4bit` for Qwen or `--ocr-cpu` for the OCR model. DeepSeek-OCR on CPU is much slower, so prefer GPU when memory allows.
 
+## Candidate Scoring Enhancement
+
+For MCQ, a stronger alternative to generation is candidate scoring: compute the log probability of each answer letter (`A`-`E`) and choose the highest. This avoids parsing failures and can be more stable than asking the model to generate one token.
+
+Test on the same first 500 EXAMS-V test examples:
+
+```bash
+python scripts/run_visual_mcq_candidate_scoring.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --limit 500 \
+  --num-prompts 1 \
+  --image-variants original \
+  --output outputs/examsv_test_qwen25vl7b_scored_500.json
+```
+
+If this beats the direct generation baseline, run the full EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_candidate_scoring.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --num-prompts 1 \
+  --image-variants original \
+  --output outputs/examsv_test_qwen25vl7b_scored_full.json
+```
+
+Candidate scoring can also consume precomputed DeepSeek-OCR JSONL:
+
+```bash
+python scripts/run_visual_mcq_candidate_scoring.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --limit 100 \
+  --num-prompts 1 \
+  --image-variants original \
+  --ocr-json outputs/examsv_test_deepseek_ocr_100.jsonl \
+  --output outputs/examsv_test_qwen25vl7b_scored_deepseek_ocr_100.json
+```
+
+Competition candidate-scored submission:
+
+```bash
+python scripts/run_visual_mcq_candidate_scoring.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --num-prompts 1 \
+  --image-variants original \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_scored.json
+```
+
 ### Two-Account DeepSeek-OCR Workflow
 
 Use this when DeepSeek-OCR needs a different Transformers version than Qwen2.5-VL.
