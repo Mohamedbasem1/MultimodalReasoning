@@ -157,6 +157,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run OCR on the enhanced image variant instead of the original image.",
     )
+    parser.add_argument(
+        "--ocr-cpu",
+        action="store_true",
+        help="Run OCR on CPU even when CUDA is available. Useful if OCR competes with the VLM for GPU memory.",
+    )
     return parser.parse_args()
 
 
@@ -368,7 +373,7 @@ def main() -> None:
             langs=args.ocr_langs,
             min_confidence=args.ocr_min_confidence,
             max_chars=args.ocr_max_chars,
-            use_gpu=torch.cuda.is_available(),
+            use_gpu=torch.cuda.is_available() and not args.ocr_cpu,
         )
     except Exception as exc:
         print(f"Warning: OCR engine '{args.ocr_engine}' could not be initialized: {exc}")
