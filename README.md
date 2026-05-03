@@ -233,6 +233,65 @@ python scripts/run_visual_mcq_voting.py \
 
 If memory gets tight, add `--load-in-4bit` for Qwen or `--ocr-cpu` for the OCR model. DeepSeek-OCR on CPU is much slower, so prefer GPU when memory allows.
 
+## Error Analysis
+
+Use this after any labeled EXAMS-V run to see where the model fails. It reports answer bias, confusion matrix, metadata group accuracy, image-size buckets, and a sample of errors.
+
+```bash
+python scripts/analyze_mcq_errors.py \
+  outputs/examsv_test_qwen25vl7b_enhanced_full.json \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --raw-output outputs/examsv_test_qwen25vl7b_enhanced_full.raw.jsonl \
+  --output-dir outputs/error_analysis_qwen25vl7b_enhanced
+```
+
+Open:
+
+```bash
+outputs/error_analysis_qwen25vl7b_enhanced/summary.json
+outputs/error_analysis_qwen25vl7b_enhanced/errors.jsonl
+```
+
+## Conditional Self-Consistency
+
+This is a smarter version of voting for the current best model. It runs direct/OCR/verify prompts on the enhanced image. If all prompts agree, it keeps the answer. If they disagree, it runs one verifier prompt and uses that answer.
+
+```bash
+python scripts/run_visual_mcq_consistency.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --limit 500 \
+  --image-variant enhanced \
+  --agreement-policy unanimous_then_verifier \
+  --output outputs/examsv_test_qwen25vl7b_consistency_500.json
+```
+
+If it beats enhanced direct on 500, run the full EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_consistency.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --image-variant enhanced \
+  --agreement-policy unanimous_then_verifier \
+  --output outputs/examsv_test_qwen25vl7b_consistency_full.json
+```
+
+Competition consistency submission:
+
+```bash
+python scripts/run_visual_mcq_consistency.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --image-variant enhanced \
+  --agreement-policy unanimous_then_verifier \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_consistency.json
+```
+
 ## Candidate Scoring Enhancement
 
 For MCQ, a stronger alternative to generation is candidate scoring: compute the log probability of each answer letter (`A`-`E`) and choose the highest. This avoids parsing failures and can be more stable than asking the model to generate one token.
