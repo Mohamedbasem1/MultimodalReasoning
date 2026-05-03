@@ -233,6 +233,62 @@ python scripts/run_visual_mcq_voting.py \
 
 If memory gets tight, add `--load-in-4bit` for Qwen or `--ocr-cpu` for the OCR model. DeepSeek-OCR on CPU is much slower, so prefer GPU when memory allows.
 
+### Two-Account DeepSeek-OCR Workflow
+
+Use this when DeepSeek-OCR needs a different Transformers version than Qwen2.5-VL.
+
+In the **DeepSeek-OCR-only Lightning account**:
+
+```bash
+git clone -b main https://github.com/Mohamedbasem1/MultimodalReasoning.git imageclef-mr2026
+cd imageclef-mr2026
+pip install -r requirements-deepseek-ocr.txt
+
+python scripts/extract_deepseek_ocr.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 100 \
+  --image-variant enhanced \
+  --output outputs/examsv_test_deepseek_ocr_100.jsonl
+```
+
+Download or copy `outputs/examsv_test_deepseek_ocr_100.jsonl` into the **Qwen Lightning account**, then run:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --limit 100 \
+  --num-prompts 1 \
+  --image-variants original \
+  --ocr-json outputs/examsv_test_deepseek_ocr_100.jsonl \
+  --output outputs/examsv_test_qwen25vl7b_deepseek_ocr_100.json
+```
+
+For the competition test set, extract OCR in the OCR account:
+
+```bash
+python scripts/extract_deepseek_ocr.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --image-variant enhanced \
+  --output outputs/imageclef_visual_mcq_deepseek_ocr.jsonl
+```
+
+Then use that OCR JSONL in the Qwen account:
+
+```bash
+python scripts/run_visual_mcq_voting.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-examsv-lora-4k \
+  --num-prompts 1 \
+  --image-variants original \
+  --ocr-json outputs/imageclef_visual_mcq_deepseek_ocr.jsonl \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_deepseek_ocr.json
+```
+
 ## Zero-Shot Prediction
 
 If you only want zero-shot prediction without fine-tuning:

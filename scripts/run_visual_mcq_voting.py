@@ -136,6 +136,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional external OCR engine. OCR text is injected into every prompt.",
     )
     parser.add_argument(
+        "--ocr-json",
+        default=None,
+        help="Optional JSON/JSONL file with precomputed records containing question_id and ocr_text.",
+    )
+    parser.add_argument(
         "--ocr-langs",
         nargs="+",
         default=["en"],
@@ -264,6 +269,33 @@ def augment_prompt_with_ocr(prompt: str, ocr_text: str) -> str:
         f"{ocr_text}\n"
         "</ocr_text>"
     )
+
+
+def load_ocr_json(path: Optional[str], max_chars: int) -> Dict[str, str]:
+    if not path:
+        return {}
+    ocr_path = Path(path)
+    if not ocr_path.exists():
+        raise FileNotFoundError(f"OCR JSON file not found: {path}")
+
+    records = []
+    if ocr_path.suffix.lower() == ".jsonl":
+        with ocr_path.open("r", encoding="utf-8") as handle:
+            records = [json.loads(line) for line in handle if line.strip()]
+    else:
+        data = json.loads(ocr_path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            records = data
+        else:
+            raise ValueError("OCR JSON must be a list or JSONL records.")
+
+    lookup: Dict[str, str] = {}
+    for record in records:
+        question_id = str(record.get("question_id", ""))
+        ocr_text = str(record.get("ocr_text", "")).strip()
+        if question_id and ocr_text:
+            lookup[question_id] = ocr_text[:max_chars]
+    return lookup
 
 
 class OcrRunner:
@@ -437,6 +469,9 @@ def main() -> None:
     for name, _prompt in prompts:
         print(f"- {name}")
     print(f"Image variants: {', '.join(args.image_variants)}")
+    ocr_lookup = load_ocr_json(args.ocr_json, args.ocr_max_chars)
+    if ocr_lookup:
+        print(f"Loaded precomputed OCR records: {len(ocr_lookup)}")
 
     try:
         ocr_runner = OcrRunner(
@@ -503,7 +538,9 @@ def main() -> None:
                 enhance_longest_side=args.enhance_longest_side,
             )
             ocr_image = image_variants[-1][1] if args.ocr_on_enhanced else image
-            ocr_text = ocr_runner.extract_text(ocr_image)
+            ocr_text = ocr_lookup.get(question_id, "")
+            if not ocr_text:
+                ocr_text = ocr_runner.extract_text(ocr_image)
             votes = []
 
             for variant_name, variant_image in image_variants:
