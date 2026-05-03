@@ -28,6 +28,7 @@ Read the image carefully, including diagrams, charts, equations, labels, units, 
 
 Think internally if needed, but output only the final option letter: A, B, C, D, or E.
 Do not output explanation or chain-of-thought."""
+TOKENIZED_CHAT_PROCESSOR_KWARGS = {"return_tensors": "pt"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -229,7 +230,7 @@ def build_inputs(processor: AutoProcessor, image: Image.Image, prompt: str) -> D
         tokenize=True,
         add_generation_prompt=True,
         return_dict=True,
-        return_tensors="pt",
+        processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
     )
     return dict(inputs)
 

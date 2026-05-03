@@ -33,6 +33,7 @@ Read the image carefully, including diagrams, charts, equations, labels, units, 
 
 Think internally if needed, but output only the final option letter: A, B, C, D, or E.
 Do not output explanation or chain-of-thought."""
+TOKENIZED_CHAT_PROCESSOR_KWARGS = {"padding": True, "return_tensors": "pt"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -268,17 +269,15 @@ class VisualMcqCollator:
             full_messages,
             tokenize=True,
             add_generation_prompt=False,
-            padding=True,
             return_dict=True,
-            return_tensors="pt",
+            processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
         )
         prompt_inputs = self.processor.apply_chat_template(
             prompt_messages,
             tokenize=True,
             add_generation_prompt=True,
-            padding=True,
             return_dict=True,
-            return_tensors="pt",
+            processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
         )
 
         labels = full_inputs["input_ids"].clone()
@@ -418,7 +417,7 @@ def evaluate_generation(
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
-            return_tensors="pt",
+            processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
         )
         inputs = move_batch_to_device(dict(inputs), model_device(model))
         generated_ids = model.generate(
