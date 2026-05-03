@@ -292,6 +292,38 @@ python scripts/run_visual_mcq_consistency.py \
   --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_consistency.json
 ```
 
+## Metadata Routing Ensemble
+
+The error analysis showed weaker performance on `image_text`, Arabic/Urdu, graphs, and tables. This router keeps the strongest direct enhanced predictions by default, but switches selected weak-case metadata rows to another prediction file, such as the multilingual prompt output.
+
+Run it on EXAMS-V first:
+
+```bash
+python scripts/route_mcq_predictions.py \
+  --primary outputs/examsv_test_qwen25vl7b_enhanced_full.json \
+  --secondary outputs/examsv_test_qwen25vl7b_multilingual_full.json \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --output outputs/examsv_test_qwen25vl7b_routed_multilingual.json \
+  --route-languages Arabic Urdu \
+  --route-types image_text \
+  --route-binary-columns graph table
+```
+
+If this beats the direct enhanced full score, generate the routed competition file after producing both competition prediction files:
+
+```bash
+python scripts/route_mcq_predictions.py \
+  --primary outputs/imageclef_visual_mcq_qwen25vl7b_lora_enhanced.json \
+  --secondary outputs/imageclef_visual_mcq_qwen25vl7b_lora_multilingual_enhanced.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_routed_multilingual.json \
+  --route-languages Arabic Urdu \
+  --route-types image_text \
+  --route-binary-columns graph table
+```
+
 ## Candidate Scoring Enhancement
 
 For MCQ, a stronger alternative to generation is candidate scoring: compute the log probability of each answer letter (`A`-`E`) and choose the highest. This avoids parsing failures and can be more stable than asking the model to generate one token.
