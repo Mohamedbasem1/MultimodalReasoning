@@ -2,13 +2,14 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import torch
 from datasets import load_dataset
 from PIL import Image, ImageEnhance, ImageFilter
 from tqdm import tqdm
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoTokenizer
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 
 ANSWER_KEYS = {"A", "B", "C", "D", "E"}
@@ -25,6 +26,7 @@ Do not output explanation."""
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MiniCPM-V 4.5 on Visual MCQ datasets.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--revision", default=None, help="Optional Hugging Face model revision.")
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--split", default="test")
     parser.add_argument("--output", default="outputs/visual_mcq_minicpm_v45.json")
@@ -146,6 +148,8 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
         "torch_dtype": dtype_from_arg(args.torch_dtype),
         "low_cpu_mem_usage": args.low_cpu_mem_usage,
     }
+    if args.revision:
+        kwargs["revision"] = args.revision
     if args.load_in_4bit:
         from transformers import BitsAndBytesConfig
 
@@ -155,12 +159,50 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_quant_type="nf4",
         )
-        return AutoModel.from_pretrained(args.model, **kwargs).eval()
+        return load_remote_model_with_patch(args, kwargs).eval()
 
-    model = AutoModel.from_pretrained(args.model, **kwargs).eval()
+    model = load_remote_model_with_patch(args, kwargs).eval()
     if torch.cuda.is_available():
         model = model.cuda()
     return model
+
+
+def patch_minicpm_tied_weight_attr(model_class: Any) -> None:
+    if hasattr(model_class, "all_tied_weights_keys"):
+        return
+
+    def all_tied_weights_keys(self: torch.nn.Module) -> Dict[str, Any]:
+        tied_keys = getattr(self, "_tied_weights_keys", None)
+        if isinstance(tied_keys, dict):
+            return tied_keys
+        if isinstance(tied_keys, (list, tuple, set)):
+            return {str(key): None for key in tied_keys}
+        return {}
+
+    model_class.all_tied_weights_keys = property(all_tied_weights_keys)
+
+
+def get_remote_model_class(model_name: str, revision: Optional[str]) -> Any:
+    config_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+    if revision:
+        config_kwargs["revision"] = revision
+    config = AutoConfig.from_pretrained(model_name, **config_kwargs)
+    auto_map = getattr(config, "auto_map", {}) or {}
+    class_reference = auto_map.get("AutoModel") or auto_map.get("AutoModelForCausalLM")
+    if not class_reference:
+        return None
+    try:
+        return get_class_from_dynamic_module(class_reference, model_name, revision=revision)
+    except TypeError:
+        return get_class_from_dynamic_module(class_reference, model_name)
+
+
+def load_remote_model_with_patch(args: argparse.Namespace, kwargs: Dict[str, Any]) -> torch.nn.Module:
+    model_class = get_remote_model_class(args.model, args.revision)
+    if model_class is None:
+        return AutoModel.from_pretrained(args.model, **kwargs)
+    patch_minicpm_tied_weight_attr(model_class)
+    return model_class.from_pretrained(args.model, **kwargs)
 
 
 def run_chat(
@@ -215,7 +257,10 @@ def main() -> None:
 
     print(f"Loading model: {args.model}")
     model = load_model(args)
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    tokenizer_kwargs: Dict[str, Any] = {"trust_remote_code": True}
+    if args.revision:
+        tokenizer_kwargs["revision"] = args.revision
+    tokenizer = AutoTokenizer.from_pretrained(args.model, **tokenizer_kwargs)
 
     predictions: List[Dict[str, str]] = []
     correct = 0
