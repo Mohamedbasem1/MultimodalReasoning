@@ -187,6 +187,42 @@ python scripts/validate_mcq_submission.py \
   --split test
 ```
 
+### Qwen3 LoRA Checkpoint Soup
+
+After a longer Qwen3 run, average the saved LoRA checkpoints into one smoother adapter. This costs no extra training and can sometimes beat the final checkpoint:
+
+```bash
+python scripts/soup_lora_adapters.py \
+  --adapters \
+    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-300 \
+    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-400 \
+    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-500 \
+    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-600 \
+  --output-dir outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5-soup-300-600
+```
+
+Evaluate the soup on EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_qwen3vl.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5-soup-300-600 \
+  --image-variant enhanced \
+  --output outputs/examsv_test_qwen3vl8b_thinking_lora_600_lr5e5_soup_300_600_enhanced_full.json
+```
+
+If it beats the current best score, run the ImageCLEF test with the soup adapter:
+
+```bash
+python scripts/run_visual_mcq_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5-soup-300-600 \
+  --image-variant enhanced \
+  --output outputs/imageclef_visual_mcq_qwen3vl8b_thinking_lora_600_lr5e5_soup_300_600_enhanced.json
+```
+
 ## Second-Stage Weak-Case Fine-Tuning
 
 After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:
