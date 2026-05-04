@@ -339,6 +339,38 @@ python scripts/run_visual_mcq_minicpm.py \
   --output outputs/examsv_test_minicpm_v45_thinking_enhanced_500.json
 ```
 
+### MiniCPM-V 4.5 Fine-Tuning
+
+MiniCPM-V scored poorly in zero-shot mode on EXAMS-V, so only run a short QLoRA smoke test before spending serious GPU time:
+
+```bash
+python scripts/train_visual_mcq_lora_minicpm.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --train-limit 200 \
+  --eval-limit 50 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --output-dir outputs/minicpm-v45-examsv-lora-smoke
+```
+
+If the smoke run finishes, evaluate the adapter quickly:
+
+```bash
+python scripts/run_visual_mcq_minicpm.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/minicpm-v45-examsv-lora-smoke \
+  --limit 500 \
+  --image-variant enhanced \
+  --max-new-tokens 32 \
+  --output outputs/examsv_test_minicpm_v45_lora_smoke_500.json
+```
+
 ## Second-Stage Weak-Case Fine-Tuning
 
 After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:

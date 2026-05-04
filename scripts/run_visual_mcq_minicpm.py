@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MiniCPM-V 4.5 on Visual MCQ datasets.")
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--revision", default=None, help="Optional Hugging Face model revision.")
+    parser.add_argument("--adapter", default=None, help="Optional PEFT/LoRA adapter directory.")
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--split", default="test")
     parser.add_argument("--output", default="outputs/visual_mcq_minicpm_v45.json")
@@ -159,12 +160,17 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_quant_type="nf4",
         )
-        return load_remote_model_with_patch(args, kwargs).eval()
+        model = load_remote_model_with_patch(args, kwargs)
+    else:
+        model = load_remote_model_with_patch(args, kwargs)
+        if torch.cuda.is_available():
+            model = model.cuda()
 
-    model = load_remote_model_with_patch(args, kwargs).eval()
-    if torch.cuda.is_available():
-        model = model.cuda()
-    return model
+    if args.adapter:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, args.adapter)
+    return model.eval()
 
 
 def patch_minicpm_tied_weight_attr(model_class: Any) -> None:
@@ -260,8 +266,9 @@ def run_chat(
     enable_thinking: bool,
     stream: bool,
 ) -> str:
+    chat_model = unwrap_for_chat(model)
     messages = [{"role": "user", "content": [image, prompt]}]
-    answer = model.chat(
+    answer = chat_model.chat(
         msgs=messages,
         tokenizer=processor.tokenizer,
         processor=processor,
@@ -274,6 +281,20 @@ def run_chat(
     if isinstance(answer, Iterable):
         return "".join(str(chunk) for chunk in answer)
     return str(answer)
+
+
+def unwrap_for_chat(model: torch.nn.Module) -> torch.nn.Module:
+    if hasattr(model, "chat"):
+        return model
+    if hasattr(model, "get_base_model"):
+        try:
+            return model.get_base_model()
+        except Exception:
+            pass
+    base_model = getattr(model, "base_model", None)
+    if base_model is not None and hasattr(base_model, "model"):
+        return base_model.model
+    return model
 
 
 def main() -> None:
