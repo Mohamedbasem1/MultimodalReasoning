@@ -144,7 +144,26 @@ def dtype_from_arg(dtype_name: str) -> Any:
     raise ValueError(f"Unsupported dtype: {dtype_name}")
 
 
+def patch_siglip2_filter_decorator() -> None:
+    """Compatibility shim for Phi-4 remote code on newer Transformers builds."""
+    try:
+        from transformers.models.siglip2 import image_processing_siglip2 as siglip2_ips
+    except Exception:
+        return
+    if hasattr(siglip2_ips, "filter_out_non_signature_kwargs"):
+        return
+
+    def filter_out_non_signature_kwargs() -> Any:
+        def decorator(func: Any) -> Any:
+            return func
+
+        return decorator
+
+    siglip2_ips.filter_out_non_signature_kwargs = filter_out_non_signature_kwargs
+
+
 def load_model(args: argparse.Namespace) -> torch.nn.Module:
+    patch_siglip2_filter_decorator()
     kwargs: Dict[str, Any] = {
         "trust_remote_code": True,
         "device_map": args.device_map,
@@ -227,6 +246,7 @@ def main() -> None:
         print(f"Gold column: {args.answer_column}")
 
     print(f"Loading model: {args.model}")
+    patch_siglip2_filter_decorator()
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=True)
     model = load_model(args)
     device = model_device(model)
