@@ -8,7 +8,7 @@ import torch
 from datasets import load_dataset
 from PIL import Image, ImageEnhance, ImageFilter
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoProcessor, AutoTokenizer
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 
@@ -205,6 +205,42 @@ def load_remote_model_with_patch(args: argparse.Namespace, kwargs: Dict[str, Any
     return model_class.from_pretrained(args.model, **kwargs)
 
 
+def ensure_minicpm_tokenizer_attrs(tokenizer: Any) -> Any:
+    vocab = tokenizer.get_vocab() if hasattr(tokenizer, "get_vocab") else {}
+    fallback_tokens = {
+        "im_start_id": ["<image>", "(<image>./</image>)", "<|im_start|>", "<image_start>"],
+        "im_end_id": ["</image>", "<|im_end|>", "<image_end>"],
+        "slice_start_id": ["<slice>", "<slice_start>"],
+        "slice_end_id": ["</slice>", "<slice_end>"],
+    }
+    for attr_name, candidates in fallback_tokens.items():
+        if hasattr(tokenizer, attr_name):
+            continue
+        token_id = None
+        for token in candidates:
+            if token in vocab:
+                token_id = vocab[token]
+                break
+        if token_id is not None:
+            setattr(tokenizer, attr_name, token_id)
+    return tokenizer
+
+
+def load_tokenizer_or_processor(model_name: str, revision: Optional[str]) -> Any:
+    kwargs: Dict[str, Any] = {"trust_remote_code": True}
+    if revision:
+        kwargs["revision"] = revision
+    try:
+        processor = AutoProcessor.from_pretrained(model_name, **kwargs)
+        tokenizer = getattr(processor, "tokenizer", None)
+        if tokenizer is not None:
+            return ensure_minicpm_tokenizer_attrs(tokenizer)
+    except Exception as exc:
+        print(f"Warning: AutoProcessor load failed, falling back to AutoTokenizer: {exc}")
+    tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
+    return ensure_minicpm_tokenizer_attrs(tokenizer)
+
+
 def run_chat(
     model: torch.nn.Module,
     tokenizer: Any,
@@ -257,10 +293,7 @@ def main() -> None:
 
     print(f"Loading model: {args.model}")
     model = load_model(args)
-    tokenizer_kwargs: Dict[str, Any] = {"trust_remote_code": True}
-    if args.revision:
-        tokenizer_kwargs["revision"] = args.revision
-    tokenizer = AutoTokenizer.from_pretrained(args.model, **tokenizer_kwargs)
+    tokenizer = load_tokenizer_or_processor(args.model, args.revision)
 
     predictions: List[Dict[str, str]] = []
     correct = 0
