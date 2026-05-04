@@ -313,6 +313,8 @@ python scripts/run_visual_mcq_minicpm.py \
   --output outputs/examsv_test_minicpm_v45_enhanced_500.json
 ```
 
+If MiniCPM loading fails with `all_tied_weights_keys`, pull the latest repo version. The runner disables Transformers low-memory/meta loading by default to avoid that compatibility path.
+
 If it is close to the current best, run the full EXAMS-V test:
 
 ```bash

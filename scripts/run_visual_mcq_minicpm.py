@@ -40,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--torch-dtype", default="bfloat16", choices=["bfloat16", "float16", "float32"])
     parser.add_argument("--attn-implementation", default="sdpa", choices=["sdpa", "flash_attention_2"])
     parser.add_argument("--load-in-4bit", action="store_true")
+    parser.add_argument(
+        "--low-cpu-mem-usage",
+        action="store_true",
+        help="Enable Transformers low-memory/meta loading. Leave off if MiniCPM loading hits all_tied_weights_keys errors.",
+    )
     parser.add_argument("--image-variant", default="enhanced", choices=["original", "enhanced"])
     parser.add_argument("--enhance-longest-side", type=int, default=1600)
     parser.add_argument("--enable-thinking", action="store_true", help="Enable MiniCPM deep thinking mode.")
@@ -139,6 +144,7 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
         "trust_remote_code": True,
         "attn_implementation": args.attn_implementation,
         "torch_dtype": dtype_from_arg(args.torch_dtype),
+        "low_cpu_mem_usage": args.low_cpu_mem_usage,
     }
     if args.load_in_4bit:
         from transformers import BitsAndBytesConfig
