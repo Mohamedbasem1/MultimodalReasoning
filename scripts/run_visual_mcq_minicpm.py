@@ -8,7 +8,7 @@ import torch
 from datasets import load_dataset
 from PIL import Image, ImageEnhance, ImageFilter
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModel, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoProcessor
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 
@@ -206,44 +206,54 @@ def load_remote_model_with_patch(args: argparse.Namespace, kwargs: Dict[str, Any
 
 
 def ensure_minicpm_tokenizer_attrs(tokenizer: Any) -> Any:
-    vocab = tokenizer.get_vocab() if hasattr(tokenizer, "get_vocab") else {}
-    fallback_tokens = {
-        "im_start_id": ["<image>", "(<image>./</image>)", "<|im_start|>", "<image_start>"],
-        "im_end_id": ["</image>", "<|im_end|>", "<image_end>"],
-        "slice_start_id": ["<slice>", "<slice_start>"],
-        "slice_end_id": ["</slice>", "<slice_end>"],
-    }
-    for attr_name, candidates in fallback_tokens.items():
-        if hasattr(tokenizer, attr_name):
-            continue
-        token_id = None
-        for token in candidates:
-            if token in vocab:
-                token_id = vocab[token]
-                break
-        if token_id is not None:
-            setattr(tokenizer, attr_name, token_id)
+    for alias_attr, token_id_attr in [("bos_id", "bos_token_id"), ("eos_id", "eos_token_id")]:
+        if not hasattr(tokenizer, alias_attr) and getattr(tokenizer, token_id_attr, None) is not None:
+            setattr(tokenizer, alias_attr, getattr(tokenizer, token_id_attr))
     return tokenizer
 
 
-def load_tokenizer_or_processor(model_name: str, revision: Optional[str]) -> Any:
+def token_id_for(tokenizer: Any, token: str) -> int:
+    token_id = tokenizer.convert_tokens_to_ids(token) if hasattr(tokenizer, "convert_tokens_to_ids") else None
+    unk_id = getattr(tokenizer, "unk_token_id", None)
+    if isinstance(token_id, int) and token_id >= 0 and token_id != unk_id:
+        return token_id
+    try:
+        encoded = tokenizer.encode(token, add_special_tokens=False)
+    except TypeError:
+        encoded = tokenizer.encode(token)
+    if not encoded:
+        raise ValueError(f"Could not encode MiniCPM special token: {token}")
+    return int(encoded[0])
+
+
+def patch_minicpm_processor(processor: Any) -> Any:
+    tokenizer = ensure_minicpm_tokenizer_attrs(processor.tokenizer)
+    image_processor = processor.image_processor
+    token_attrs = {
+        "im_start_id": getattr(image_processor, "im_start_token", "<image>"),
+        "im_end_id": getattr(image_processor, "im_end_token", "</image>"),
+        "slice_start_id": getattr(image_processor, "slice_start_token", "<slice>"),
+        "slice_end_id": getattr(image_processor, "slice_end_token", "</slice>"),
+    }
+    for attr_name, token in token_attrs.items():
+        if hasattr(tokenizer, attr_name):
+            continue
+        setattr(tokenizer, attr_name, token_id_for(tokenizer, token))
+    processor.tokenizer = tokenizer
+    return processor
+
+
+def load_processor(model_name: str, revision: Optional[str]) -> Any:
     kwargs: Dict[str, Any] = {"trust_remote_code": True}
     if revision:
         kwargs["revision"] = revision
-    try:
-        processor = AutoProcessor.from_pretrained(model_name, **kwargs)
-        tokenizer = getattr(processor, "tokenizer", None)
-        if tokenizer is not None:
-            return ensure_minicpm_tokenizer_attrs(tokenizer)
-    except Exception as exc:
-        print(f"Warning: AutoProcessor load failed, falling back to AutoTokenizer: {exc}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, **kwargs)
-    return ensure_minicpm_tokenizer_attrs(tokenizer)
+    processor = AutoProcessor.from_pretrained(model_name, **kwargs)
+    return patch_minicpm_processor(processor)
 
 
 def run_chat(
     model: torch.nn.Module,
-    tokenizer: Any,
+    processor: Any,
     image: Image.Image,
     prompt: str,
     max_new_tokens: int,
@@ -253,7 +263,8 @@ def run_chat(
     messages = [{"role": "user", "content": [image, prompt]}]
     answer = model.chat(
         msgs=messages,
-        tokenizer=tokenizer,
+        tokenizer=processor.tokenizer,
+        processor=processor,
         enable_thinking=enable_thinking,
         stream=stream,
         max_new_tokens=max_new_tokens,
@@ -293,7 +304,7 @@ def main() -> None:
 
     print(f"Loading model: {args.model}")
     model = load_model(args)
-    tokenizer = load_tokenizer_or_processor(args.model, args.revision)
+    processor = load_processor(args.model, args.revision)
 
     predictions: List[Dict[str, str]] = []
     correct = 0
@@ -306,7 +317,7 @@ def main() -> None:
             image = select_image_variant(image, args.image_variant, args.enhance_longest_side)
             raw_text = run_chat(
                 model=model,
-                tokenizer=tokenizer,
+                processor=processor,
                 image=image,
                 prompt=prompt,
                 max_new_tokens=args.max_new_tokens,
