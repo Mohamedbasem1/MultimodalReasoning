@@ -371,6 +371,46 @@ python scripts/run_visual_mcq_minicpm.py \
   --output outputs/examsv_test_minicpm_v45_lora_smoke_500.json
 ```
 
+## Phi-4-Reasoning-Vision-15B Inference
+
+`microsoft/Phi-4-reasoning-vision-15B` is a 15B MIT-licensed VLM focused on visual reasoning, charts, OCR, documents, and STEM-style questions. Run inference first before considering LoRA.
+
+Install in a fresh Lightning Studio if possible because the model card requires newer Torch/Transformers:
+
+```bash
+pip install -r requirements-phi4vision.txt
+```
+
+Run a 500-example EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_phi4vision.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 500 \
+  --load-in-4bit \
+  --image-variant enhanced \
+  --reasoning-mode nothink \
+  --max-new-tokens 48 \
+  --output outputs/examsv_test_phi4_reasoning_vision_15b_nothink_enhanced_500.json
+```
+
+If it is close to the current Qwen3 best, try automatic reasoning mode:
+
+```bash
+python scripts/run_visual_mcq_phi4vision.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 500 \
+  --load-in-4bit \
+  --image-variant enhanced \
+  --reasoning-mode auto \
+  --max-new-tokens 128 \
+  --output outputs/examsv_test_phi4_reasoning_vision_15b_auto_enhanced_500.json
+```
+
+If either 500-example run beats the current Qwen3 score trend, run the full EXAMS-V test by removing `--limit`.
+
 ## Second-Stage Weak-Case Fine-Tuning
 
 After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:
