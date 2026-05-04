@@ -188,6 +188,21 @@ def patch_minicpm_tied_weight_attr(model_class: Any) -> None:
     model_class.all_tied_weights_keys = property(all_tied_weights_keys)
 
 
+def patch_minicpm_peft_generation_attr(model_class: Any) -> None:
+    if hasattr(model_class, "prepare_inputs_for_generation"):
+        return
+
+    def prepare_inputs_for_generation(self: torch.nn.Module, input_ids: Any = None, **kwargs: Any) -> Dict[str, Any]:
+        llm = getattr(self, "llm", None)
+        if llm is not None and hasattr(llm, "prepare_inputs_for_generation"):
+            return llm.prepare_inputs_for_generation(input_ids=input_ids, **kwargs)
+        if input_ids is not None:
+            kwargs["input_ids"] = input_ids
+        return kwargs
+
+    model_class.prepare_inputs_for_generation = prepare_inputs_for_generation
+
+
 def get_remote_model_class(model_name: str, revision: Optional[str]) -> Any:
     config_kwargs: Dict[str, Any] = {"trust_remote_code": True}
     if revision:
@@ -208,6 +223,7 @@ def load_remote_model_with_patch(args: argparse.Namespace, kwargs: Dict[str, Any
     if model_class is None:
         return AutoModel.from_pretrained(args.model, **kwargs)
     patch_minicpm_tied_weight_attr(model_class)
+    patch_minicpm_peft_generation_attr(model_class)
     return model_class.from_pretrained(args.model, **kwargs)
 
 
