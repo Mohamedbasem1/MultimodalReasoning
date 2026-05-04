@@ -247,7 +247,7 @@ python scripts/train_visual_mcq_lora_aya.py \
   --train-limit 200 \
   --eval-limit 50 \
   --max-steps 20 \
-  --eval-steps 10 \
+  --eval-steps 0 \
   --save-steps 10 \
   --output-dir outputs/aya-vision-8b-examsv-lora-smoke
 ```
@@ -264,7 +264,7 @@ python scripts/train_visual_mcq_lora_aya.py \
   --max-steps 300 \
   --learning-rate 1e-4 \
   --eval-limit 300 \
-  --eval-steps 100 \
+  --eval-steps 0 \
   --save-steps 100 \
   --output-dir outputs/aya-vision-8b-examsv-lora-300
 ```

@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-new-tokens", type=int, default=16)
     parser.add_argument("--logging-steps", type=int, default=10)
-    parser.add_argument("--eval-steps", type=int, default=100)
+    parser.add_argument("--eval-steps", type=int, default=100, help="Set to 0 to disable generation eval during training.")
     parser.add_argument("--save-steps", type=int, default=100)
     parser.add_argument("--eval-generate-limit", type=int, default=100)
     parser.add_argument("--gradient-checkpointing", action="store_true")
@@ -483,7 +483,10 @@ def main() -> None:
                     running_loss = 0.0
                     progress.write(f"step={global_step} loss={avg_loss:.4f}")
 
-                if global_step % args.eval_steps == 0 and len(eval_dataset):
+                if args.save_steps > 0 and global_step % args.save_steps == 0:
+                    save_adapter(model, processor, output_dir, global_step)
+
+                if args.eval_steps > 0 and global_step % args.eval_steps == 0 and len(eval_dataset):
                     metrics = evaluate_generation(
                         model=model,
                         processor=processor,
@@ -498,9 +501,6 @@ def main() -> None:
                         f"step={global_step} eval_accuracy={metrics['accuracy']:.4f} "
                         f"n={int(metrics['count'])}"
                     )
-
-                if global_step % args.save_steps == 0:
-                    save_adapter(model, processor, output_dir, global_step)
 
                 if global_step >= total_steps:
                     break
