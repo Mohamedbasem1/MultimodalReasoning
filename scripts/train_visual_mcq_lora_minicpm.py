@@ -319,7 +319,7 @@ def build_minicpm_text_and_images(
     add_generation_prompt: bool,
 ) -> Tuple[str, List[Image.Image]]:
     messages: List[Dict[str, Any]] = [
-        {"role": "user", "content": ["(<image>./</image>)", prompt]},
+        {"role": "user", "content": f"(<image>./</image>)\n{prompt}"},
     ]
     if answer is not None:
         messages.append({"role": "assistant", "content": answer})
