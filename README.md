@@ -223,6 +223,74 @@ python scripts/run_visual_mcq_qwen3vl.py \
   --output outputs/imageclef_visual_mcq_qwen3vl8b_thinking_lora_600_lr5e5_soup_300_600_enhanced.json
 ```
 
+## Aya Vision 8B Fine-Tuning
+
+`CohereLabs/aya-vision-8b` is a gated multilingual VLM. Before using it, accept the model terms on Hugging Face, log in from Lightning with a token from the same account, and confirm that the competition allows `CC-BY-NC-4.0` models.
+
+Use a separate Lightning Studio if possible because Aya Vision requires a specific Transformers branch:
+
+```bash
+pip install -r requirements-aya-vision.txt
+hf auth login
+hf download CohereLabs/aya-vision-8b config.json --repo-type model --local-dir /tmp/aya-test
+```
+
+Run a small QLoRA smoke test:
+
+```bash
+python scripts/train_visual_mcq_lora_aya.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --train-limit 200 \
+  --eval-limit 50 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --output-dir outputs/aya-vision-8b-examsv-lora-smoke
+```
+
+If the smoke run works, try a 300-step adapter:
+
+```bash
+python scripts/train_visual_mcq_lora_aya.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --max-steps 300 \
+  --learning-rate 1e-4 \
+  --eval-limit 300 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --output-dir outputs/aya-vision-8b-examsv-lora-300
+```
+
+Evaluate it on EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_aya.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/aya-vision-8b-examsv-lora-300 \
+  --image-variant enhanced \
+  --output outputs/examsv_test_aya_vision_8b_lora_300_enhanced_full.json
+```
+
+Only run the ImageCLEF test if it beats the current Qwen3 score:
+
+```bash
+python scripts/run_visual_mcq_aya.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --adapter outputs/aya-vision-8b-examsv-lora-300 \
+  --image-variant enhanced \
+  --output outputs/imageclef_visual_mcq_aya_vision_8b_lora_300_enhanced.json
+```
+
 ## Second-Stage Weak-Case Fine-Tuning
 
 After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:
