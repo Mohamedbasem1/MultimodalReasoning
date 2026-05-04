@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--split", default="test")
+    parser.add_argument("--adapter", default=None, help="Optional PEFT/LoRA adapter directory.")
     parser.add_argument("--output", default="outputs/visual_mcq_phi4_reasoning_vision_15b.json")
     parser.add_argument("--raw-output", default=None, help="Defaults to '<output>.raw.jsonl'.")
     parser.add_argument("--prompt-file", default="prompts/visual_mcq_final_only.txt")
@@ -176,7 +177,12 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
             "Warning: --load-in-4bit is ignored for Phi-4-reasoning-vision-15B because "
             "its custom loader casts the model after loading, which conflicts with bitsandbytes."
         )
-    return AutoModelForCausalLM.from_pretrained(args.model, **kwargs).eval()
+    model = AutoModelForCausalLM.from_pretrained(args.model, **kwargs)
+    if args.adapter:
+        from peft import PeftModel
+
+        model = PeftModel.from_pretrained(model, args.adapter)
+    return model.eval()
 
 
 def model_device(model: torch.nn.Module) -> torch.device:

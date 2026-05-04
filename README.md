@@ -388,7 +388,6 @@ python scripts/run_visual_mcq_phi4vision.py \
   --dataset MBZUAI/EXAMS-V \
   --split test \
   --limit 500 \
-  --load-in-4bit \
   --image-variant enhanced \
   --reasoning-mode nothink \
   --max-new-tokens 48 \
@@ -402,7 +401,6 @@ python scripts/run_visual_mcq_phi4vision.py \
   --dataset MBZUAI/EXAMS-V \
   --split test \
   --limit 500 \
-  --load-in-4bit \
   --image-variant enhanced \
   --reasoning-mode auto \
   --max-new-tokens 128 \
@@ -410,6 +408,71 @@ python scripts/run_visual_mcq_phi4vision.py \
 ```
 
 If either 500-example run beats the current Qwen3 score trend, run the full EXAMS-V test by removing `--limit`.
+
+### Phi-4 Fine-Tuning
+
+Phi-4's custom loader currently conflicts with bitsandbytes 4-bit casting, so train this on a larger GPU without `--load-in-4bit`. Start with a 20-step smoke run:
+
+```bash
+python scripts/train_visual_mcq_lora_phi4vision.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --gradient-checkpointing \
+  --train-limit 200 \
+  --eval-limit 50 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --image-variant enhanced \
+  --reasoning-mode nothink \
+  --output-dir outputs/phi4-reasoning-vision-15b-examsv-lora-smoke
+```
+
+Evaluate the smoke adapter on 500 labeled test rows:
+
+```bash
+python scripts/run_visual_mcq_phi4vision.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/phi4-reasoning-vision-15b-examsv-lora-smoke \
+  --limit 500 \
+  --image-variant enhanced \
+  --reasoning-mode nothink \
+  --max-new-tokens 48 \
+  --output outputs/examsv_test_phi4_reasoning_vision_15b_lora_smoke_500.json
+```
+
+If the smoke run improves over the zero-shot 28.2% sample, run a longer LoRA:
+
+```bash
+python scripts/train_visual_mcq_lora_phi4vision.py \
+  --dataset MBZUAI/EXAMS-V \
+  --train-split train \
+  --eval-split validation \
+  --gradient-checkpointing \
+  --max-steps 300 \
+  --learning-rate 5e-5 \
+  --eval-limit 300 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --image-variant enhanced \
+  --reasoning-mode nothink \
+  --output-dir outputs/phi4-reasoning-vision-15b-examsv-lora-300-lr5e5
+```
+
+Then evaluate the full labeled test:
+
+```bash
+python scripts/run_visual_mcq_phi4vision.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --adapter outputs/phi4-reasoning-vision-15b-examsv-lora-300-lr5e5 \
+  --image-variant enhanced \
+  --reasoning-mode nothink \
+  --max-new-tokens 48 \
+  --output outputs/examsv_test_phi4_reasoning_vision_15b_lora_300_lr5e5_enhanced_full.json
+```
 
 ## Second-Stage Weak-Case Fine-Tuning
 
