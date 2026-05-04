@@ -291,6 +291,52 @@ python scripts/run_visual_mcq_aya.py \
   --output outputs/imageclef_visual_mcq_aya_vision_8b_lora_300_enhanced.json
 ```
 
+## MiniCPM-V 4.5 Inference
+
+`openbmb/MiniCPM-V-4_5` is an Apache-2.0 8.7B VLM built on Qwen3-8B with strong OCR, document parsing, and 30+ language support. Start with inference before spending GPU on fine-tuning.
+
+Install:
+
+```bash
+pip install -r requirements-minicpm-v.txt
+```
+
+Run a 500-example EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_minicpm.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 500 \
+  --image-variant enhanced \
+  --max-new-tokens 32 \
+  --output outputs/examsv_test_minicpm_v45_enhanced_500.json
+```
+
+If it is close to the current best, run the full EXAMS-V test:
+
+```bash
+python scripts/run_visual_mcq_minicpm.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --image-variant enhanced \
+  --max-new-tokens 32 \
+  --output outputs/examsv_test_minicpm_v45_enhanced_full.json
+```
+
+Optional slower deep-thinking mode:
+
+```bash
+python scripts/run_visual_mcq_minicpm.py \
+  --dataset MBZUAI/EXAMS-V \
+  --split test \
+  --limit 500 \
+  --image-variant enhanced \
+  --enable-thinking \
+  --max-new-tokens 64 \
+  --output outputs/examsv_test_minicpm_v45_thinking_enhanced_500.json
+```
+
 ## Second-Stage Weak-Case Fine-Tuning
 
 After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:
