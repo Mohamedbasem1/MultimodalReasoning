@@ -399,11 +399,12 @@ def save_adapter(model: torch.nn.Module, processor: Any, output_dir: Path, step:
 
 
 def save_processor(processor: Any, output_dir: Path) -> None:
-    if not hasattr(processor, "chat_template"):
-        processor.chat_template = None
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is not None:
+        tokenizer.save_pretrained(output_dir)
     try:
         processor.save_pretrained(output_dir)
-    except AttributeError as exc:
+    except (AttributeError, TypeError) as exc:
         print(f"Warning: could not save Phi processor metadata: {exc}")
 
 
@@ -542,7 +543,6 @@ def main() -> None:
 
     progress.close()
     save_adapter(model, processor, output_dir, global_step)
-    model.save_pretrained(output_dir)
     save_processor(processor, output_dir)
     print(f"Saved final LoRA adapter: {output_dir}")
 
