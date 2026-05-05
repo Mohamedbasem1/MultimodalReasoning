@@ -17,6 +17,7 @@ from transformers import AutoModelForCausalLM, AutoProcessor, get_cosine_schedul
 
 from run_visual_mcq_phi4vision import (
     DEFAULT_IMAGE_TOKEN,
+    patch_phi_processor,
     patch_siglip2_filter_decorator,
     parse_answer,
     select_image_variant,
@@ -415,8 +416,7 @@ def main() -> None:
     patch_siglip2_filter_decorator()
     prompt = load_prompt(args.prompt_file)
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=True)
-    if not hasattr(processor, "chat_template"):
-        processor.chat_template = None
+    processor = patch_phi_processor(processor)
     if processor.tokenizer.pad_token_id is None and processor.tokenizer.eos_token is not None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
 

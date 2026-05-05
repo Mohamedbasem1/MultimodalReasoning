@@ -210,6 +210,54 @@ def patch_siglip2_filter_decorator() -> None:
     siglip2_ips.filter_out_non_signature_kwargs = filter_out_non_signature_kwargs
 
 
+def patch_phi_processor(processor: Any) -> Any:
+    if not hasattr(processor, "chat_template"):
+        processor.chat_template = None
+
+    image_processor = getattr(processor, "image_processor", None)
+    if image_processor is None:
+        return processor
+
+    original_normalize = getattr(image_processor, "normalize", None)
+
+    def normalize_compat(
+        image: Any,
+        mean: Sequence[float],
+        std: Sequence[float],
+        data_format: Any = None,
+        input_data_format: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        try:
+            import numpy as np
+            from transformers.image_transforms import normalize as numpy_normalize
+
+            if isinstance(image, np.ndarray):
+                return numpy_normalize(
+                    image=image,
+                    mean=mean,
+                    std=std,
+                    data_format=data_format,
+                    input_data_format=input_data_format,
+                )
+        except Exception:
+            pass
+
+        if original_normalize is None:
+            raise TypeError(f"Unsupported image type for Phi normalize: {type(image)!r}")
+        return original_normalize(
+            image=image,
+            mean=mean,
+            std=std,
+            data_format=data_format,
+            input_data_format=input_data_format,
+            **kwargs,
+        )
+
+    image_processor.normalize = normalize_compat
+    return processor
+
+
 def load_model(args: argparse.Namespace) -> torch.nn.Module:
     patch_siglip2_filter_decorator()
     kwargs: Dict[str, Any] = {
@@ -326,6 +374,7 @@ def main() -> None:
     print(f"Loading model: {args.model}")
     patch_siglip2_filter_decorator()
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=True)
+    processor = patch_phi_processor(processor)
     model = load_model(args)
     device = model_device(model)
 
