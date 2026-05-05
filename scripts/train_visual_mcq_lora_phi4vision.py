@@ -394,7 +394,16 @@ def save_adapter(model: torch.nn.Module, processor: Any, output_dir: Path, step:
     checkpoint_dir = output_dir / f"checkpoint-{step}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(checkpoint_dir)
-    processor.save_pretrained(checkpoint_dir)
+    save_processor(processor, checkpoint_dir)
+
+
+def save_processor(processor: Any, output_dir: Path) -> None:
+    if not hasattr(processor, "chat_template"):
+        processor.chat_template = None
+    try:
+        processor.save_pretrained(output_dir)
+    except AttributeError as exc:
+        print(f"Warning: could not save Phi processor metadata: {exc}")
 
 
 def main() -> None:
@@ -406,6 +415,8 @@ def main() -> None:
     patch_siglip2_filter_decorator()
     prompt = load_prompt(args.prompt_file)
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=True)
+    if not hasattr(processor, "chat_template"):
+        processor.chat_template = None
     if processor.tokenizer.pad_token_id is None and processor.tokenizer.eos_token is not None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
@@ -532,7 +543,7 @@ def main() -> None:
     progress.close()
     save_adapter(model, processor, output_dir, global_step)
     model.save_pretrained(output_dir)
-    processor.save_pretrained(output_dir)
+    save_processor(processor, output_dir)
     print(f"Saved final LoRA adapter: {output_dir}")
 
 

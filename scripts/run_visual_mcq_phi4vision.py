@@ -181,8 +181,36 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.adapter:
         from peft import PeftModel
 
-        model = PeftModel.from_pretrained(model, args.adapter)
+        model = PeftModel.from_pretrained(model, resolve_adapter_path(args.adapter))
     return model.eval()
+
+
+def checkpoint_sort_key(path: Path) -> int:
+    match = re.search(r"checkpoint-(\d+)$", path.name)
+    return int(match.group(1)) if match else -1
+
+
+def resolve_adapter_path(adapter: str) -> str:
+    adapter_path = Path(adapter)
+    if not adapter_path.exists():
+        return adapter
+    if (adapter_path / "adapter_config.json").exists():
+        return str(adapter_path)
+
+    checkpoints = [
+        child
+        for child in adapter_path.glob("checkpoint-*")
+        if child.is_dir() and (child / "adapter_config.json").exists()
+    ]
+    if checkpoints:
+        latest = sorted(checkpoints, key=checkpoint_sort_key)[-1]
+        print(f"Warning: adapter_config.json not found in {adapter_path}; using {latest}")
+        return str(latest)
+
+    raise FileNotFoundError(
+        f"Adapter path exists but has no adapter_config.json: {adapter_path}. "
+        "Training likely crashed before saving the final LoRA adapter."
+    )
 
 
 def model_device(model: torch.nn.Module) -> torch.device:
