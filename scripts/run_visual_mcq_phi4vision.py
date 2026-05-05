@@ -151,6 +151,15 @@ def patch_siglip2_filter_decorator() -> None:
         from transformers.models.siglip2 import image_processing_siglip2 as siglip2_ips
     except Exception:
         return
+
+    if not hasattr(siglip2_ips, "ChannelDimension"):
+        try:
+            from transformers.image_utils import ChannelDimension
+
+            siglip2_ips.ChannelDimension = ChannelDimension
+        except Exception:
+            pass
+
     if hasattr(siglip2_ips, "filter_out_non_signature_kwargs"):
         return
 
