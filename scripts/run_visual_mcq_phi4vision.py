@@ -234,13 +234,16 @@ def patch_phi_processor(processor: Any) -> Any:
             from transformers.image_transforms import normalize as numpy_normalize
 
             if isinstance(image, np.ndarray):
-                return numpy_normalize(
+                normalized = numpy_normalize(
                     image=image,
                     mean=mean,
                     std=std,
                     data_format=data_format or ChannelDimension.FIRST,
                     input_data_format=input_data_format,
                 )
+                if isinstance(normalized, np.ndarray):
+                    return torch.from_numpy(np.ascontiguousarray(normalized))
+                return normalized
         except Exception:
             pass
 
