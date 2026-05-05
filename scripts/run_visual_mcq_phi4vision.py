@@ -230,6 +230,7 @@ def patch_phi_processor(processor: Any) -> Any:
     ) -> Any:
         try:
             import numpy as np
+            from transformers.image_utils import ChannelDimension
             from transformers.image_transforms import normalize as numpy_normalize
 
             if isinstance(image, np.ndarray):
@@ -237,7 +238,7 @@ def patch_phi_processor(processor: Any) -> Any:
                     image=image,
                     mean=mean,
                     std=std,
-                    data_format=data_format,
+                    data_format=data_format or ChannelDimension.FIRST,
                     input_data_format=input_data_format,
                 )
         except Exception:
