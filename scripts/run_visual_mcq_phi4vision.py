@@ -198,6 +198,26 @@ def patch_siglip2_filter_decorator() -> None:
 
         siglip2_ips.make_flat_list_of_images = make_flat_list_of_images
 
+    original_convert_image_to_patches = getattr(siglip2_ips, "convert_image_to_patches", None)
+    if original_convert_image_to_patches is not None and not getattr(
+        original_convert_image_to_patches, "_phi4_hwc_compat", False
+    ):
+        def convert_image_to_patches_compat(image: Any, patch_size: int) -> Any:
+            converted = image
+            try:
+                import numpy as np
+
+                if isinstance(converted, np.ndarray):
+                    converted = torch.from_numpy(np.ascontiguousarray(converted))
+                if torch.is_tensor(converted) and converted.ndim == 3 and converted.shape[-1] in {1, 3, 4}:
+                    converted = converted.permute(2, 0, 1).contiguous()
+            except Exception:
+                pass
+            return original_convert_image_to_patches(converted, patch_size)
+
+        convert_image_to_patches_compat._phi4_hwc_compat = True
+        siglip2_ips.convert_image_to_patches = convert_image_to_patches_compat
+
     if hasattr(siglip2_ips, "filter_out_non_signature_kwargs"):
         return
 
@@ -238,7 +258,7 @@ def patch_phi_processor(processor: Any) -> Any:
                     image=image,
                     mean=mean,
                     std=std,
-                    data_format=data_format or ChannelDimension.FIRST,
+                    data_format=data_format or ChannelDimension.LAST,
                     input_data_format=input_data_format,
                 )
                 if isinstance(normalized, np.ndarray):
