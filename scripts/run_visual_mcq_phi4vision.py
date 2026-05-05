@@ -152,13 +152,51 @@ def patch_siglip2_filter_decorator() -> None:
     except Exception:
         return
 
-    if not hasattr(siglip2_ips, "ChannelDimension"):
+    def patch_attrs(module_name: str, attr_names: Sequence[str]) -> None:
         try:
-            from transformers.image_utils import ChannelDimension
-
-            siglip2_ips.ChannelDimension = ChannelDimension
+            module = __import__(module_name, fromlist=["_"])
         except Exception:
-            pass
+            return
+        for attr_name in attr_names:
+            if not hasattr(siglip2_ips, attr_name) and hasattr(module, attr_name):
+                setattr(siglip2_ips, attr_name, getattr(module, attr_name))
+
+    patch_attrs(
+        "transformers.image_utils",
+        [
+            "ChannelDimension",
+            "ImageInput",
+            "PILImageResampling",
+            "get_channel_dimension_axis",
+            "get_image_size",
+            "infer_channel_dimension_format",
+            "is_scaled_image",
+            "is_valid_image",
+            "make_flat_list_of_images",
+            "make_list_of_images",
+            "to_numpy_array",
+            "valid_images",
+        ],
+    )
+    patch_attrs(
+        "transformers.image_processing_utils",
+        ["BatchFeature", "get_size_dict", "validate_preprocess_arguments"],
+    )
+    patch_attrs(
+        "transformers.image_transforms",
+        ["convert_to_rgb", "normalize", "rescale", "resize", "to_channel_dimension_format"],
+    )
+
+    if not hasattr(siglip2_ips, "make_flat_list_of_images"):
+        def make_flat_list_of_images(images: Any) -> List[Any]:
+            if isinstance(images, (list, tuple)):
+                flat_images: List[Any] = []
+                for image in images:
+                    flat_images.extend(make_flat_list_of_images(image))
+                return flat_images
+            return [images]
+
+        siglip2_ips.make_flat_list_of_images = make_flat_list_of_images
 
     if hasattr(siglip2_ips, "filter_out_non_signature_kwargs"):
         return
