@@ -284,6 +284,24 @@ python scripts/validate_openqa_submission.py \
   --official-format
 ```
 
+## Visual OpenQA With Aya Vision 8B
+
+`CohereLabs/aya-vision-8b` is another OpenQA experiment. The model is gated on Hugging Face, so log in with an account that has access before running.
+
+Run the full unattended pipeline:
+
+```bash
+hf auth login
+nohup bash scripts/run_openqa_aya_full_pipeline.sh > aya_openqa.nohup.log 2>&1 &
+tail -f aya_openqa.nohup.log
+```
+
+The pipeline installs `requirements-aya-vision.txt`, trains a 600-step QLoRA adapter, predicts the blinded test split, converts to the official answer-list format, and validates the file. The final submission path is:
+
+```bash
+outputs/visual_openqa_aya_vision_8b_lora_600_lr5e5_test_official.json
+```
+
 ## Qwen3-VL-8B-Thinking Fine-Tuning
 
 `Qwen/Qwen3-VL-8B-Thinking` is a stronger Normal-category experiment than the Tiny Qwen2.5-VL-7B baseline. It needs the newer Qwen3-VL Transformers code, so use a fresh Lightning Studio or reinstall Transformers before running it.
