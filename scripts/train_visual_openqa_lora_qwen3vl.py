@@ -33,8 +33,10 @@ Read the image carefully, including all question text, diagrams, charts, tables,
 Learn and follow the structure of the reference answers in training: concise wording, same language as the question when possible, correct units, exact numbers, and no unnecessary sentence framing.
 
 Think internally if needed, but output only the concise final answer text.
-Do not output explanation, reasoning, chain-of-thought, or <think> tags."""
+Do not output explanation, reasoning, chain-of-thought, or <think> tags.
+/no_think"""
 TOKENIZED_CHAT_PROCESSOR_KWARGS = {"padding": True, "return_tensors": "pt"}
+NO_THINK_PREFILL = "</think>\n\n"
 
 
 def parse_args() -> argparse.Namespace:
@@ -155,7 +157,10 @@ def select_image_variant(image: Image.Image, variant: str, longest_side: int) ->
 
 def clean_answer(value: Any, max_chars: int) -> Optional[str]:
     answer = str(value).strip()
-    answer = re.sub(r"<think>.*?</think>", " ", answer, flags=re.IGNORECASE | re.DOTALL)
+    if re.search(r"</think>", answer, flags=re.IGNORECASE):
+        answer = re.split(r"</think>", answer, flags=re.IGNORECASE)[-1]
+    else:
+        answer = re.sub(r"<think>.*", " ", answer, flags=re.IGNORECASE | re.DOTALL)
     answer = re.sub(r"</?think>", " ", answer, flags=re.IGNORECASE)
     answer = re.sub(r"\s+", " ", answer)
     answer = answer.strip(" \t\r\n\"'")
@@ -241,6 +246,36 @@ def apply_chat_template(
         except TypeError:
             pass
     return processor.apply_chat_template(messages, **kwargs)
+
+
+def build_no_think_prefill_inputs(
+    processor: AutoProcessor,
+    image: Image.Image,
+    prompt: str,
+    processor_kwargs: Dict[str, Any],
+) -> Dict[str, torch.Tensor] | None:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": NO_THINK_PREFILL}]},
+    ]
+    try:
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=False,
+            continue_final_message=True,
+            return_dict=True,
+            processor_kwargs=processor_kwargs,
+        )
+    except (TypeError, ValueError):
+        return None
+    return ensure_tensor_inputs(dict(inputs))
 
 
 def tensorize_value(value: Any) -> Any:
@@ -434,17 +469,27 @@ def evaluate_generation(
         expected = clean_answer(row[answer_column], max_answer_chars)
         if expected is None:
             continue
-        messages = build_messages(image, prompt, None)
-        inputs = apply_chat_template(
-            processor=processor,
-            messages=messages,
-            enable_thinking=enable_thinking,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            processor_kwargs={"return_tensors": "pt"},
-        )
-        inputs = move_batch_to_device(ensure_tensor_inputs(dict(inputs)), model_device(model))
+        inputs = None
+        if not enable_thinking:
+            inputs = build_no_think_prefill_inputs(
+                processor=processor,
+                image=image,
+                prompt=prompt,
+                processor_kwargs={"return_tensors": "pt"},
+            )
+        if inputs is None:
+            messages = build_messages(image, prompt, None)
+            inputs = apply_chat_template(
+                processor=processor,
+                messages=messages,
+                enable_thinking=enable_thinking,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                processor_kwargs={"return_tensors": "pt"},
+            )
+            inputs = ensure_tensor_inputs(dict(inputs))
+        inputs = move_batch_to_device(inputs, model_device(model))
         generated_ids = model.generate(**inputs, do_sample=False, max_new_tokens=max_new_tokens)
         trimmed_ids = [
             output_ids[len(input_ids) :]

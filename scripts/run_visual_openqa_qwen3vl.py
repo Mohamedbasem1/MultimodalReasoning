@@ -28,8 +28,10 @@ Read the image carefully, including all question text, diagrams, charts, tables,
 Learn and follow the structure of the reference answers in training: concise wording, same language as the question when possible, correct units, exact numbers, and no unnecessary sentence framing.
 
 Think internally if needed, but output only the concise final answer text.
-Do not output explanation, reasoning, chain-of-thought, or <think> tags."""
+Do not output explanation, reasoning, chain-of-thought, or <think> tags.
+/no_think"""
 TOKENIZED_CHAT_PROCESSOR_KWARGS = {"return_tensors": "pt"}
+NO_THINK_PREFILL = "</think>\n\n"
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,7 +123,11 @@ def select_image_variant(image: Image.Image, variant: str, longest_side: int) ->
 
 
 def clean_answer(raw_text: str, max_chars: int) -> str:
-    text = re.sub(r"<think>.*?</think>", " ", raw_text, flags=re.IGNORECASE | re.DOTALL)
+    text = raw_text.strip()
+    if re.search(r"</think>", text, flags=re.IGNORECASE):
+        text = re.split(r"</think>", text, flags=re.IGNORECASE)[-1]
+    else:
+        text = re.sub(r"<think>.*", " ", text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r"</?think>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"<answer>|</answer>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:final\s+answer|answer)\s*(?:is|:|-)?\s*", "", text, flags=re.IGNORECASE)
@@ -199,6 +205,11 @@ def build_inputs(
     prompt: str,
     enable_thinking: bool,
 ) -> Dict[str, torch.Tensor]:
+    if not enable_thinking:
+        no_think_inputs = build_no_think_prefill_inputs(processor, image, prompt)
+        if no_think_inputs is not None:
+            return no_think_inputs
+
     messages = [
         {
             "role": "user",
@@ -217,6 +228,35 @@ def build_inputs(
         return_dict=True,
         processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
     )
+    return ensure_tensor_inputs(dict(inputs))
+
+
+def build_no_think_prefill_inputs(
+    processor: AutoProcessor,
+    image: Image.Image,
+    prompt: str,
+) -> Dict[str, torch.Tensor] | None:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": NO_THINK_PREFILL}]},
+    ]
+    try:
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=False,
+            continue_final_message=True,
+            return_dict=True,
+            processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
+        )
+    except (TypeError, ValueError):
+        return None
     return ensure_tensor_inputs(dict(inputs))
 
 
