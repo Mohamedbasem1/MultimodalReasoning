@@ -33,7 +33,7 @@ Read the image carefully, including all question text, diagrams, charts, tables,
 Learn and follow the structure of the reference answers in training: concise wording, same language as the question when possible, correct units, exact numbers, and no unnecessary sentence framing.
 
 Think internally if needed, but output only the concise final answer text.
-Do not output explanation, reasoning, or chain-of-thought."""
+Do not output explanation, reasoning, chain-of-thought, or <think> tags."""
 TOKENIZED_CHAT_PROCESSOR_KWARGS = {"padding": True, "return_tensors": "pt"}
 
 
@@ -71,8 +71,9 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
-    parser.add_argument("--max-new-tokens", type=int, default=96)
-    parser.add_argument("--max-answer-chars", type=int, default=300)
+    parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument("--max-answer-chars", type=int, default=1000)
+    parser.add_argument("--enable-thinking", action="store_true", help="Allow Qwen3 thinking mode if supported.")
     parser.add_argument("--max-pixels", type=int, default=1280 * 28 * 28)
     parser.add_argument("--min-pixels", type=int, default=256 * 28 * 28)
     parser.add_argument("--logging-steps", type=int, default=10)
@@ -154,9 +155,11 @@ def select_image_variant(image: Image.Image, variant: str, longest_side: int) ->
 
 def clean_answer(value: Any, max_chars: int) -> Optional[str]:
     answer = str(value).strip()
+    answer = re.sub(r"<think>.*?</think>", " ", answer, flags=re.IGNORECASE | re.DOTALL)
+    answer = re.sub(r"</?think>", " ", answer, flags=re.IGNORECASE)
     answer = re.sub(r"\s+", " ", answer)
     answer = answer.strip(" \t\r\n\"'")
-    if not answer or answer.lower() in {"none", "nan", "null"}:
+    if not answer or answer.lower() in {"none", "nan", "null", "hidden"}:
         return None
     if max_chars > 0 and len(answer) > max_chars:
         answer = answer[:max_chars].rstrip()
@@ -226,6 +229,18 @@ def build_messages(image: Image.Image, prompt: str, answer: Optional[str]) -> Li
     return messages
 
 
+def apply_chat_template(
+    processor: AutoProcessor,
+    messages: List[List[Dict[str, Any]]] | List[Dict[str, Any]],
+    enable_thinking: bool,
+    **kwargs: Any,
+) -> Any:
+    try:
+        return processor.apply_chat_template(messages, enable_thinking=enable_thinking, **kwargs)
+    except TypeError:
+        return processor.apply_chat_template(messages, **kwargs)
+
+
 class VisualOpenQaCollator:
     def __init__(
         self,
@@ -236,6 +251,7 @@ class VisualOpenQaCollator:
         image_variant: str,
         enhance_longest_side: int,
         max_answer_chars: int,
+        enable_thinking: bool,
     ):
         self.processor = processor
         self.prompt = prompt
@@ -244,6 +260,7 @@ class VisualOpenQaCollator:
         self.image_variant = image_variant
         self.enhance_longest_side = enhance_longest_side
         self.max_answer_chars = max_answer_chars
+        self.enable_thinking = enable_thinking
 
     def __call__(self, rows: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
         full_messages: List[List[Dict[str, Any]]] = []
@@ -258,15 +275,19 @@ class VisualOpenQaCollator:
             full_messages.append(build_messages(image, self.prompt, answer))
             prompt_messages.append(build_messages(image, self.prompt, None))
 
-        full_inputs = self.processor.apply_chat_template(
-            full_messages,
+        full_inputs = apply_chat_template(
+            processor=self.processor,
+            messages=full_messages,
+            enable_thinking=self.enable_thinking,
             tokenize=True,
             add_generation_prompt=False,
             return_dict=True,
             processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
         )
-        prompt_inputs = self.processor.apply_chat_template(
-            prompt_messages,
+        prompt_inputs = apply_chat_template(
+            processor=self.processor,
+            messages=prompt_messages,
+            enable_thinking=self.enable_thinking,
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
@@ -373,6 +394,7 @@ def evaluate_generation(
     image_variant: str,
     enhance_longest_side: int,
     max_answer_chars: int,
+    enable_thinking: bool,
 ) -> Dict[str, float]:
     model.eval()
     total = min(limit, len(dataset))
@@ -385,8 +407,10 @@ def evaluate_generation(
         if expected is None:
             continue
         messages = build_messages(image, prompt, None)
-        inputs = processor.apply_chat_template(
-            messages,
+        inputs = apply_chat_template(
+            processor=processor,
+            messages=messages,
+            enable_thinking=enable_thinking,
             tokenize=True,
             add_generation_prompt=True,
             return_dict=True,
@@ -461,6 +485,7 @@ def main() -> None:
         image_variant=args.image_variant,
         enhance_longest_side=args.enhance_longest_side,
         max_answer_chars=args.max_answer_chars,
+        enable_thinking=args.enable_thinking,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -544,6 +569,7 @@ def main() -> None:
                         image_variant=args.image_variant,
                         enhance_longest_side=args.enhance_longest_side,
                         max_answer_chars=args.max_answer_chars,
+                        enable_thinking=args.enable_thinking,
                     )
                     progress.write(
                         f"step={global_step} eval_exact_match={metrics['exact_match']:.4f} "

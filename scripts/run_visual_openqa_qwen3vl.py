@@ -28,7 +28,7 @@ Read the image carefully, including all question text, diagrams, charts, tables,
 Learn and follow the structure of the reference answers in training: concise wording, same language as the question when possible, correct units, exact numbers, and no unnecessary sentence framing.
 
 Think internally if needed, but output only the concise final answer text.
-Do not output explanation, reasoning, or chain-of-thought."""
+Do not output explanation, reasoning, chain-of-thought, or <think> tags."""
 TOKENIZED_CHAT_PROCESSOR_KWARGS = {"return_tensors": "pt"}
 
 
@@ -47,8 +47,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-column", default="auto")
     parser.add_argument("--answer-column", default="auto", help="Optional gold answer column for labeled splits.")
     parser.add_argument("--answer-field", default="answer", help="Submission answer field name.")
-    parser.add_argument("--max-new-tokens", type=int, default=96)
-    parser.add_argument("--max-answer-chars", type=int, default=300)
+    parser.add_argument("--max-new-tokens", type=int, default=192)
+    parser.add_argument("--max-answer-chars", type=int, default=1000)
+    parser.add_argument("--enable-thinking", action="store_true", help="Allow Qwen3 thinking mode if supported.")
     parser.add_argument("--max-pixels", type=int, default=1280 * 28 * 28)
     parser.add_argument("--min-pixels", type=int, default=256 * 28 * 28)
     parser.add_argument("--device-map", default="auto")
@@ -121,6 +122,7 @@ def select_image_variant(image: Image.Image, variant: str, longest_side: int) ->
 
 def clean_answer(raw_text: str, max_chars: int) -> str:
     text = re.sub(r"<think>.*?</think>", " ", raw_text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"</?think>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"<answer>|</answer>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:final\s+answer|answer)\s*(?:is|:|-)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
@@ -191,7 +193,12 @@ def model_device(model: torch.nn.Module) -> torch.device:
     return next(model.parameters()).device
 
 
-def build_inputs(processor: AutoProcessor, image: Image.Image, prompt: str) -> Dict[str, torch.Tensor]:
+def build_inputs(
+    processor: AutoProcessor,
+    image: Image.Image,
+    prompt: str,
+    enable_thinking: bool,
+) -> Dict[str, torch.Tensor]:
     messages = [
         {
             "role": "user",
@@ -201,14 +208,28 @@ def build_inputs(processor: AutoProcessor, image: Image.Image, prompt: str) -> D
             ],
         }
     ]
-    inputs = processor.apply_chat_template(
-        messages,
+    inputs = apply_chat_template(
+        processor=processor,
+        messages=messages,
+        enable_thinking=enable_thinking,
         tokenize=True,
         add_generation_prompt=True,
         return_dict=True,
         processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
     )
     return dict(inputs)
+
+
+def apply_chat_template(
+    processor: AutoProcessor,
+    messages: List[Dict[str, Any]],
+    enable_thinking: bool,
+    **kwargs: Any,
+) -> Any:
+    try:
+        return processor.apply_chat_template(messages, enable_thinking=enable_thinking, **kwargs)
+    except TypeError:
+        return processor.apply_chat_template(messages, **kwargs)
 
 
 def move_batch_to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
@@ -267,7 +288,7 @@ def main() -> None:
             question_id = str(row[id_column])
             image = normalize_image(row[image_column])
             image = select_image_variant(image, args.image_variant, args.enhance_longest_side)
-            inputs = move_batch_to_device(build_inputs(processor, image, prompt), device)
+            inputs = move_batch_to_device(build_inputs(processor, image, prompt, args.enable_thinking), device)
 
             with torch.inference_mode():
                 generated_ids = model.generate(
@@ -294,8 +315,9 @@ def main() -> None:
             if answer_column:
                 gold = str(row[answer_column]).strip()
                 raw_row["gold"] = gold
-                scored += 1
-                exact += int(normalize_for_match(answer) == normalize_for_match(gold))
+                if gold and gold.upper() != "HIDDEN":
+                    scored += 1
+                    exact += int(normalize_for_match(answer) == normalize_for_match(gold))
             raw_file.write(json.dumps(raw_row, ensure_ascii=False) + "\n")
 
     output_path.write_text(json.dumps(predictions, ensure_ascii=False, indent=2), encoding="utf-8")
