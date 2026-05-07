@@ -217,7 +217,7 @@ def build_inputs(
         return_dict=True,
         processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
     )
-    return dict(inputs)
+    return ensure_tensor_inputs(dict(inputs))
 
 
 def apply_chat_template(
@@ -226,10 +226,36 @@ def apply_chat_template(
     enable_thinking: bool,
     **kwargs: Any,
 ) -> Any:
-    try:
-        return processor.apply_chat_template(messages, enable_thinking=enable_thinking, **kwargs)
-    except TypeError:
-        return processor.apply_chat_template(messages, **kwargs)
+    if enable_thinking:
+        try:
+            return processor.apply_chat_template(messages, enable_thinking=True, **kwargs)
+        except TypeError:
+            pass
+    return processor.apply_chat_template(messages, **kwargs)
+
+
+def tensorize_value(value: Any) -> Any:
+    if torch.is_tensor(value):
+        return value
+    if isinstance(value, list):
+        if not value:
+            return value
+        if all(torch.is_tensor(item) for item in value):
+            return torch.stack(value)
+        try:
+            return torch.tensor(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def ensure_tensor_inputs(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    tensor_inputs = {key: tensorize_value(value) for key, value in inputs.items()}
+    for key in ("input_ids", "attention_mask"):
+        value = tensor_inputs.get(key)
+        if torch.is_tensor(value) and value.ndim == 1:
+            tensor_inputs[key] = value.unsqueeze(0)
+    return tensor_inputs
 
 
 def move_batch_to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:

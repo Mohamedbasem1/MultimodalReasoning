@@ -235,10 +235,36 @@ def apply_chat_template(
     enable_thinking: bool,
     **kwargs: Any,
 ) -> Any:
-    try:
-        return processor.apply_chat_template(messages, enable_thinking=enable_thinking, **kwargs)
-    except TypeError:
-        return processor.apply_chat_template(messages, **kwargs)
+    if enable_thinking:
+        try:
+            return processor.apply_chat_template(messages, enable_thinking=True, **kwargs)
+        except TypeError:
+            pass
+    return processor.apply_chat_template(messages, **kwargs)
+
+
+def tensorize_value(value: Any) -> Any:
+    if torch.is_tensor(value):
+        return value
+    if isinstance(value, list):
+        if not value:
+            return value
+        if all(torch.is_tensor(item) for item in value):
+            return torch.stack(value)
+        try:
+            return torch.tensor(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
+
+def ensure_tensor_inputs(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    tensor_inputs = {key: tensorize_value(value) for key, value in inputs.items()}
+    for key in ("input_ids", "attention_mask"):
+        value = tensor_inputs.get(key)
+        if torch.is_tensor(value) and value.ndim == 1:
+            tensor_inputs[key] = value.unsqueeze(0)
+    return tensor_inputs
 
 
 class VisualOpenQaCollator:
@@ -284,6 +310,7 @@ class VisualOpenQaCollator:
             return_dict=True,
             processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
         )
+        full_inputs = ensure_tensor_inputs(dict(full_inputs))
         prompt_inputs = apply_chat_template(
             processor=self.processor,
             messages=prompt_messages,
@@ -293,6 +320,7 @@ class VisualOpenQaCollator:
             return_dict=True,
             processor_kwargs=TOKENIZED_CHAT_PROCESSOR_KWARGS,
         )
+        prompt_inputs = ensure_tensor_inputs(dict(prompt_inputs))
 
         labels = full_inputs["input_ids"].clone()
         prompt_lengths = prompt_inputs["attention_mask"].sum(dim=1)
@@ -416,7 +444,7 @@ def evaluate_generation(
             return_dict=True,
             processor_kwargs={"return_tensors": "pt"},
         )
-        inputs = move_batch_to_device(dict(inputs), model_device(model))
+        inputs = move_batch_to_device(ensure_tensor_inputs(dict(inputs)), model_device(model))
         generated_ids = model.generate(**inputs, do_sample=False, max_new_tokens=max_new_tokens)
         trimmed_ids = [
             output_ids[len(input_ids) :]
