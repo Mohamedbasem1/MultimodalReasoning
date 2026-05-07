@@ -153,7 +153,7 @@ Start with a small OpenQA QLoRA smoke run:
 python scripts/train_visual_openqa_lora_qwen3vl.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --train-split train \
-  --eval-split validation \
+  --eval-split dev \
   --load-in-4bit \
   --gradient-checkpointing \
   --train-limit 200 \
@@ -165,7 +165,7 @@ python scripts/train_visual_openqa_lora_qwen3vl.py \
   --output-dir outputs/qwen3vl8b-thinking-openqa-lora-smoke
 ```
 
-If the dataset uses `dev` instead of `validation`, replace `--eval-split validation` with `--eval-split dev`.
+The OpenQA prompt explicitly asks the model to learn the reference-answer structure: concise wording, same language when possible, correct units, exact numbers, and no extra sentence framing.
 
 Run a longer OpenQA LoRA:
 
@@ -173,7 +173,7 @@ Run a longer OpenQA LoRA:
 python scripts/train_visual_openqa_lora_qwen3vl.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --train-split train \
-  --eval-split validation \
+  --eval-split dev \
   --load-in-4bit \
   --gradient-checkpointing \
   --max-steps 600 \

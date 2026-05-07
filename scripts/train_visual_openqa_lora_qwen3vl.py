@@ -30,6 +30,8 @@ DEFAULT_PROMPT = """You are answering a visual open-ended exam question.
 
 Read the image carefully, including all question text, diagrams, charts, tables, labels, formulas, and units.
 
+Learn and follow the structure of the reference answers in training: concise wording, same language as the question when possible, correct units, exact numbers, and no unnecessary sentence framing.
+
 Think internally if needed, but output only the concise final answer text.
 Do not output explanation, reasoning, or chain-of-thought."""
 TOKENIZED_CHAT_PROCESSOR_KWARGS = {"padding": True, "return_tensors": "pt"}
@@ -41,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--init-adapter", default=None, help="Optional existing PEFT/LoRA adapter to continue training from.")
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--train-split", default="train")
-    parser.add_argument("--eval-split", default="validation")
+    parser.add_argument("--eval-split", default="dev")
     parser.add_argument("--output-dir", default="outputs/qwen3vl8b-thinking-openqa-lora")
     parser.add_argument("--prompt-file", default="prompts/visual_openqa_prompt.txt")
     parser.add_argument("--id-column", default="auto")
