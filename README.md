@@ -153,11 +153,13 @@ Start with a small OpenQA QLoRA smoke run:
 python scripts/train_visual_openqa_lora_qwen3vl.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --train-split train \
-  --eval-split dev \
+  --validation-from-train 100 \
+  --internal-test-split dev \
   --load-in-4bit \
   --gradient-checkpointing \
   --train-limit 200 \
-  --eval-limit 50 \
+  --eval-limit 100 \
+  --internal-test-limit 50 \
   --max-steps 20 \
   --eval-steps 10 \
   --save-steps 10 \
@@ -173,17 +175,20 @@ Run a longer OpenQA LoRA:
 python scripts/train_visual_openqa_lora_qwen3vl.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --train-split train \
-  --eval-split dev \
+  --validation-from-train 100 \
+  --internal-test-split dev \
   --load-in-4bit \
   --gradient-checkpointing \
   --max-steps 600 \
   --learning-rate 3e-5 \
-  --eval-limit 300 \
+  --eval-limit 100 \
   --eval-steps 100 \
   --save-steps 100 \
   --image-variant enhanced \
   --output-dir outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5
 ```
+
+With `--validation-from-train 100`, the trainer shuffles the filtered train split using `--seed`, holds out 100 labeled train rows for validation, and trains on the rest. `--internal-test-split dev` is scored only after training, so it stays separate from checkpoint selection. Use the blinded `test` split only for the final prediction file.
 
 Predict the competition Visual OpenQA test split:
 
@@ -193,7 +198,6 @@ python scripts/run_visual_openqa_qwen3vl.py \
   --split test \
   --adapter outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5 \
   --image-variant enhanced \
-  --max-new-tokens 96 \
   --output outputs/visual_openqa_qwen3vl_lora.json
 
 python scripts/validate_openqa_submission.py \

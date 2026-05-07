@@ -57,6 +57,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weak-filter-mode", default="or", choices=["or", "and"])
     parser.add_argument("--train-limit", type=int, default=None)
     parser.add_argument("--eval-limit", type=int, default=300)
+    parser.add_argument(
+        "--validation-from-train",
+        type=int,
+        default=0,
+        help="Hold out this many filtered train rows for validation before applying --train-limit.",
+    )
+    parser.add_argument(
+        "--internal-test-split",
+        default=None,
+        help="Optional labeled split to score once after final training, e.g. dev.",
+    )
+    parser.add_argument("--internal-test-limit", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-epochs", type=float, default=1.0)
     parser.add_argument("--max-steps", type=int, default=None)
@@ -179,6 +191,29 @@ def normalize_for_match(text: Any) -> str:
     return value
 
 
+def token_f1(prediction: Any, expected: Any) -> float:
+    pred_tokens = normalize_for_match(prediction).split()
+    expected_tokens = normalize_for_match(expected).split()
+    if not pred_tokens and not expected_tokens:
+        return 1.0
+    if not pred_tokens or not expected_tokens:
+        return 0.0
+    expected_counts: Dict[str, int] = {}
+    for token in expected_tokens:
+        expected_counts[token] = expected_counts.get(token, 0) + 1
+    overlap = 0
+    for token in pred_tokens:
+        count = expected_counts.get(token, 0)
+        if count:
+            overlap += 1
+            expected_counts[token] = count - 1
+    if overlap == 0:
+        return 0.0
+    precision = overlap / len(pred_tokens)
+    recall = overlap / len(expected_tokens)
+    return 2 * precision * recall / (precision + recall)
+
+
 def truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -217,6 +252,19 @@ def maybe_limit(dataset: Dataset, limit: Optional[int]) -> Dataset:
     if limit is None:
         return dataset
     return dataset.select(range(min(limit, len(dataset))))
+
+
+def split_train_validation(dataset: Dataset, validation_size: int, seed: int) -> tuple[Dataset, Dataset]:
+    if validation_size <= 0:
+        return dataset, dataset.select([])
+    if validation_size >= len(dataset):
+        raise ValueError(
+            f"--validation-from-train={validation_size} must be smaller than filtered train rows ({len(dataset)})."
+        )
+    shuffled = dataset.shuffle(seed=seed)
+    validation_dataset = shuffled.select(range(validation_size))
+    train_dataset = shuffled.select(range(validation_size, len(shuffled)))
+    return train_dataset, validation_dataset
 
 
 def build_messages(image: Image.Image, prompt: str, answer: Optional[str]) -> List[Dict[str, Any]]:
@@ -462,6 +510,8 @@ def evaluate_generation(
     model.eval()
     total = min(limit, len(dataset))
     exact = 0
+    scored = 0
+    f1_sum = 0.0
 
     for row in tqdm(dataset.select(range(total)), desc="Eval generation", leave=False):
         image = normalize_image(row[image_column])
@@ -502,9 +552,16 @@ def evaluate_generation(
         )[0]
         prediction = clean_answer(raw_text, max_answer_chars) or ""
         exact += int(normalize_for_match(prediction) == normalize_for_match(expected))
+        f1_sum += token_f1(prediction, expected)
+        scored += 1
 
     model.train()
-    return {"exact_match": exact / total if total else 0.0, "count": float(total)}
+    return {
+        "exact_match": exact / scored if scored else 0.0,
+        "token_f1": f1_sum / scored if scored else 0.0,
+        "count": float(scored),
+        "seen": float(total),
+    }
 
 
 def save_adapter(model: torch.nn.Module, processor: AutoProcessor, output_dir: Path, step: int) -> None:
@@ -531,7 +588,6 @@ def main() -> None:
 
     print(f"Loading train split: {args.dataset} [{args.train_split}]")
     train_dataset = load_dataset(args.dataset, split=args.train_split)
-    eval_dataset = load_dataset(args.dataset, split=args.eval_split)
 
     id_column = pick_column(train_dataset.column_names, args.id_column, ["question_id", "sample_id", "id"])
     image_column = pick_column(train_dataset.column_names, args.image_column, ["image", "image_id"])
@@ -544,10 +600,32 @@ def main() -> None:
     print(f"Image column: {image_column}")
     print(f"Answer column: {answer_column}")
 
-    train_dataset = maybe_limit(filter_dataset(train_dataset, args, answer_column), args.train_limit)
-    eval_dataset = maybe_limit(filter_dataset(eval_dataset, args, answer_column), args.eval_limit)
+    train_dataset = filter_dataset(train_dataset, args, answer_column)
+    eval_answer_column = answer_column
+    eval_source = args.eval_split
+    if args.validation_from_train > 0:
+        train_dataset, eval_dataset = split_train_validation(
+            train_dataset,
+            validation_size=args.validation_from_train,
+            seed=args.seed,
+        )
+        eval_source = f"{args.train_split}-holdout-{args.validation_from_train}"
+        print(f"Validation source: {eval_source}")
+    else:
+        print(f"Loading eval split: {args.dataset} [{args.eval_split}]")
+        eval_dataset = load_dataset(args.dataset, split=args.eval_split)
+        eval_answer_column = pick_column(
+            eval_dataset.column_names,
+            args.answer_column,
+            ["answer", "answer_text", "reference_answer", "gold_answer", "open_answer", "label"],
+        )
+        eval_dataset = filter_dataset(eval_dataset, args, eval_answer_column)
+        print(f"Validation source: {args.eval_split}")
+
+    train_dataset = maybe_limit(train_dataset, args.train_limit)
+    eval_dataset = maybe_limit(eval_dataset, args.eval_limit)
     print(f"Train rows: {len(train_dataset)}")
-    print(f"Eval rows: {len(eval_dataset)}")
+    print(f"Validation rows: {len(eval_dataset)}")
 
     model = load_model(args)
     collator = VisualOpenQaCollator(
@@ -587,6 +665,8 @@ def main() -> None:
             "id_column": id_column,
             "image_column": image_column,
             "answer_column": answer_column,
+            "eval_answer_column": eval_answer_column,
+            "eval_source": eval_source,
             "train_rows": len(train_dataset),
             "eval_rows": len(eval_dataset),
             "total_steps": total_steps,
@@ -636,7 +716,7 @@ def main() -> None:
                         dataset=eval_dataset,
                         prompt=prompt,
                         image_column=image_column,
-                        answer_column=answer_column,
+                        answer_column=eval_answer_column,
                         limit=args.eval_generate_limit,
                         max_new_tokens=args.max_new_tokens,
                         image_variant=args.image_variant,
@@ -646,7 +726,7 @@ def main() -> None:
                     )
                     progress.write(
                         f"step={global_step} eval_exact_match={metrics['exact_match']:.4f} "
-                        f"n={int(metrics['count'])}"
+                        f"eval_token_f1={metrics['token_f1']:.4f} n={int(metrics['count'])}"
                     )
 
                 if args.save_steps > 0 and global_step % args.save_steps == 0:
@@ -662,6 +742,48 @@ def main() -> None:
     save_adapter(model, processor, output_dir, global_step)
     model.save_pretrained(output_dir)
     processor.save_pretrained(output_dir)
+
+    if args.internal_test_split:
+        print(f"Loading internal test split: {args.dataset} [{args.internal_test_split}]")
+        internal_dataset = load_dataset(args.dataset, split=args.internal_test_split)
+        internal_image_column = pick_column(
+            internal_dataset.column_names,
+            args.image_column,
+            ["image", "image_id"],
+        )
+        internal_answer_column = pick_column(
+            internal_dataset.column_names,
+            args.answer_column,
+            ["answer", "answer_text", "reference_answer", "gold_answer", "open_answer", "label"],
+        )
+        internal_dataset = filter_dataset(internal_dataset, args, internal_answer_column)
+        internal_dataset = maybe_limit(internal_dataset, args.internal_test_limit)
+        print(f"Internal test rows: {len(internal_dataset)}")
+        if len(internal_dataset):
+            metrics = evaluate_generation(
+                model=model,
+                processor=processor,
+                dataset=internal_dataset,
+                prompt=prompt,
+                image_column=internal_image_column,
+                answer_column=internal_answer_column,
+                limit=len(internal_dataset),
+                max_new_tokens=args.max_new_tokens,
+                image_variant=args.image_variant,
+                enhance_longest_side=args.enhance_longest_side,
+                max_answer_chars=args.max_answer_chars,
+                enable_thinking=args.enable_thinking,
+            )
+            print(
+                f"internal_test_split={args.internal_test_split} "
+                f"exact_match={metrics['exact_match']:.4f} "
+                f"token_f1={metrics['token_f1']:.4f} n={int(metrics['count'])}"
+            )
+        else:
+            print(
+                f"Internal test split '{args.internal_test_split}' has no scorable answer rows after filtering."
+            )
+
     print(f"Saved final LoRA adapter: {output_dir}")
 
 
