@@ -114,6 +114,94 @@ python scripts/validate_mcq_submission.py \
 
 Submit `outputs/visual_mcq_qwen25vl7b_lora.json`.
 
+## Visual OpenQA With Qwen3-VL
+
+Visual OpenQA is a generative task: the model must produce a free-form answer instead of an `A/B/C/D/E` choice. The submission JSON uses:
+
+```json
+[
+  {"question_id": "example_id", "answer": "short answer text"}
+]
+```
+
+Install the Qwen3-VL dependencies:
+
+```bash
+pip install -r requirements-qwen3vl.txt
+```
+
+Run a tiny prediction smoke test on the competition Visual OpenQA test split:
+
+```bash
+python scripts/run_visual_openqa_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --limit 5 \
+  --image-variant enhanced \
+  --output outputs/visual_openqa_qwen3vl_smoke.json
+
+python scripts/validate_openqa_submission.py \
+  outputs/visual_openqa_qwen3vl_smoke.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --allow-subset
+```
+
+Start with a small OpenQA QLoRA smoke run:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --eval-split validation \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --train-limit 200 \
+  --eval-limit 50 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen3vl8b-thinking-openqa-lora-smoke
+```
+
+If the dataset uses `dev` instead of `validation`, replace `--eval-split validation` with `--eval-split dev`.
+
+Run a longer OpenQA LoRA:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --eval-split validation \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --max-steps 600 \
+  --learning-rate 3e-5 \
+  --eval-limit 300 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5
+```
+
+Predict the competition Visual OpenQA test split:
+
+```bash
+python scripts/run_visual_openqa_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --adapter outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5 \
+  --image-variant enhanced \
+  --max-new-tokens 96 \
+  --output outputs/visual_openqa_qwen3vl_lora.json
+
+python scripts/validate_openqa_submission.py \
+  outputs/visual_openqa_qwen3vl_lora.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test
+```
+
 ## Qwen3-VL-8B-Thinking Fine-Tuning
 
 `Qwen/Qwen3-VL-8B-Thinking` is a stronger Normal-category experiment than the Tiny Qwen2.5-VL-7B baseline. It needs the newer Qwen3-VL Transformers code, so use a fresh Lightning Studio or reinstall Transformers before running it.
