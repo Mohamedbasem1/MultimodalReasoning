@@ -120,7 +120,7 @@ Visual OpenQA is a generative task: the model must produce a free-form answer in
 
 ```json
 [
-  {"question_id": "example_id", "answer": "short answer text"}
+  {"question_id": "example_id", "answers": ["short answer text"], "language": "Bulgarian"}
 ]
 ```
 
@@ -198,12 +198,19 @@ python scripts/run_visual_openqa_qwen3vl.py \
   --split test \
   --adapter outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5 \
   --image-variant enhanced \
+  --output outputs/visual_openqa_qwen3vl_lora_legacy.json
+
+python scripts/convert_openqa_submission.py \
+  outputs/visual_openqa_qwen3vl_lora_legacy.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
   --output outputs/visual_openqa_qwen3vl_lora.json
 
 python scripts/validate_openqa_submission.py \
   outputs/visual_openqa_qwen3vl_lora.json \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --split test
+  --split test \
+  --official-format
 ```
 
 ## Qwen3-VL-8B-Thinking Fine-Tuning
