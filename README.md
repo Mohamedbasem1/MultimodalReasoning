@@ -214,6 +214,76 @@ python scripts/validate_openqa_submission.py \
   --official-format
 ```
 
+## Visual OpenQA With Qwen2.5-VL
+
+This is a lighter OpenQA experiment using `Qwen/Qwen2.5-VL-7B-Instruct`. It uses the same answer-structure prompt as the Qwen3 OpenQA run, but without Qwen3 thinking-mode handling.
+
+Install the Qwen2.5-VL dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run a small QLoRA smoke test first:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen25vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --validation-from-train 100 \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --train-limit 200 \
+  --eval-limit 100 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen25vl7b-instruct-openqa-lora-smoke
+```
+
+Run the longer OpenQA LoRA:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen25vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --validation-from-train 100 \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --max-steps 600 \
+  --learning-rate 3e-5 \
+  --eval-limit 100 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen25vl7b-instruct-openqa-lora-600-lr3e5
+```
+
+Predict and convert the blinded Visual OpenQA test split:
+
+```bash
+python scripts/run_visual_openqa_qwen25vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-instruct-openqa-lora-600-lr3e5 \
+  --image-variant enhanced \
+  --output outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_legacy.json
+
+python scripts/convert_openqa_submission.py \
+  outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_legacy.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --split-answers \
+  --output outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_official.json
+
+python scripts/validate_openqa_submission.py \
+  outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_official.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --official-format
+```
+
 ## Qwen3-VL-8B-Thinking Fine-Tuning
 
 `Qwen/Qwen3-VL-8B-Thinking` is a stronger Normal-category experiment than the Tiny Qwen2.5-VL-7B baseline. It needs the newer Qwen3-VL Transformers code, so use a fresh Lightning Studio or reinstall Transformers before running it.
