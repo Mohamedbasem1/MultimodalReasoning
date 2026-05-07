@@ -204,6 +204,7 @@ python scripts/convert_openqa_submission.py \
   outputs/visual_openqa_qwen3vl_lora_legacy.json \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --split test \
+  --split-answers \
   --output outputs/visual_openqa_qwen3vl_lora.json
 
 python scripts/validate_openqa_submission.py \
