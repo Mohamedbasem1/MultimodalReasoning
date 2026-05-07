@@ -154,7 +154,7 @@ python scripts/train_visual_openqa_lora_qwen3vl.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --train-split train \
   --validation-from-train 100 \
-  --internal-test-split dev \
+  --internal-test-from-train 100 \
   --load-in-4bit \
   --gradient-checkpointing \
   --train-limit 200 \
@@ -176,7 +176,7 @@ python scripts/train_visual_openqa_lora_qwen3vl.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --train-split train \
   --validation-from-train 100 \
-  --internal-test-split dev \
+  --internal-test-from-train 100 \
   --load-in-4bit \
   --gradient-checkpointing \
   --max-steps 600 \
@@ -188,7 +188,7 @@ python scripts/train_visual_openqa_lora_qwen3vl.py \
   --output-dir outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5
 ```
 
-With `--validation-from-train 100`, the trainer shuffles the filtered train split using `--seed`, holds out 100 labeled train rows for validation, and trains on the rest. `--internal-test-split dev` is scored only after training, so it stays separate from checkpoint selection. Use the blinded `test` split only for the final prediction file.
+With `--validation-from-train 100` and `--internal-test-from-train 100`, the trainer shuffles the filtered train split using `--seed`, holds out 100 labeled train rows for validation, holds out another 100 labeled train rows for final internal testing, and trains on the rest. In the current HF release the `dev` answers may be hidden, so use it for qualitative prediction checks unless labels are available. Use the blinded `test` split only for the final prediction file.
 
 Predict the competition Visual OpenQA test split:
 

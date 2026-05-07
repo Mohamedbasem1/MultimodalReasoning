@@ -68,6 +68,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional labeled split to score once after final training, e.g. dev.",
     )
+    parser.add_argument(
+        "--internal-test-from-train",
+        type=int,
+        default=0,
+        help="Hold out this many additional filtered train rows for a final internal test.",
+    )
     parser.add_argument("--internal-test-limit", type=int, default=None)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-epochs", type=float, default=1.0)
@@ -254,17 +260,27 @@ def maybe_limit(dataset: Dataset, limit: Optional[int]) -> Dataset:
     return dataset.select(range(min(limit, len(dataset))))
 
 
-def split_train_validation(dataset: Dataset, validation_size: int, seed: int) -> tuple[Dataset, Dataset]:
-    if validation_size <= 0:
-        return dataset, dataset.select([])
-    if validation_size >= len(dataset):
+def split_train_holdouts(
+    dataset: Dataset,
+    validation_size: int,
+    internal_test_size: int,
+    seed: int,
+) -> tuple[Dataset, Dataset, Dataset]:
+    validation_size = max(0, validation_size)
+    internal_test_size = max(0, internal_test_size)
+    holdout_size = validation_size + internal_test_size
+    if holdout_size <= 0:
+        empty = dataset.select([])
+        return dataset, empty, empty
+    if holdout_size >= len(dataset):
         raise ValueError(
-            f"--validation-from-train={validation_size} must be smaller than filtered train rows ({len(dataset)})."
+            f"Train holdouts ({holdout_size}) must be smaller than filtered train rows ({len(dataset)})."
         )
     shuffled = dataset.shuffle(seed=seed)
     validation_dataset = shuffled.select(range(validation_size))
-    train_dataset = shuffled.select(range(validation_size, len(shuffled)))
-    return train_dataset, validation_dataset
+    internal_test_dataset = shuffled.select(range(validation_size, holdout_size))
+    train_dataset = shuffled.select(range(holdout_size, len(shuffled)))
+    return train_dataset, validation_dataset, internal_test_dataset
 
 
 def build_messages(image: Image.Image, prompt: str, answer: Optional[str]) -> List[Dict[str, Any]]:
@@ -603,14 +619,18 @@ def main() -> None:
     train_dataset = filter_dataset(train_dataset, args, answer_column)
     eval_answer_column = answer_column
     eval_source = args.eval_split
-    if args.validation_from_train > 0:
-        train_dataset, eval_dataset = split_train_validation(
+    internal_train_test_dataset = train_dataset.select([])
+    if args.validation_from_train > 0 or args.internal_test_from_train > 0:
+        train_dataset, eval_dataset, internal_train_test_dataset = split_train_holdouts(
             train_dataset,
             validation_size=args.validation_from_train,
+            internal_test_size=args.internal_test_from_train,
             seed=args.seed,
         )
         eval_source = f"{args.train_split}-holdout-{args.validation_from_train}"
         print(f"Validation source: {eval_source}")
+        if args.internal_test_from_train > 0:
+            print(f"Train internal test source: {args.train_split}-holdout-{args.internal_test_from_train}")
     else:
         print(f"Loading eval split: {args.dataset} [{args.eval_split}]")
         eval_dataset = load_dataset(args.dataset, split=args.eval_split)
@@ -624,8 +644,11 @@ def main() -> None:
 
     train_dataset = maybe_limit(train_dataset, args.train_limit)
     eval_dataset = maybe_limit(eval_dataset, args.eval_limit)
+    internal_train_test_dataset = maybe_limit(internal_train_test_dataset, args.internal_test_limit)
     print(f"Train rows: {len(train_dataset)}")
     print(f"Validation rows: {len(eval_dataset)}")
+    if args.internal_test_from_train > 0:
+        print(f"Train internal test rows: {len(internal_train_test_dataset)}")
 
     model = load_model(args)
     collator = VisualOpenQaCollator(
@@ -647,9 +670,10 @@ def main() -> None:
     )
 
     updates_per_epoch = math.ceil(len(train_loader) / args.grad_accum_steps)
-    total_steps = int(math.ceil(args.num_epochs * updates_per_epoch))
     if args.max_steps is not None:
-        total_steps = min(total_steps, args.max_steps)
+        total_steps = args.max_steps
+    else:
+        total_steps = int(math.ceil(args.num_epochs * updates_per_epoch))
     warmup_steps = max(1, int(total_steps * args.warmup_ratio))
 
     optimizer = AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
@@ -667,6 +691,7 @@ def main() -> None:
             "answer_column": answer_column,
             "eval_answer_column": eval_answer_column,
             "eval_source": eval_source,
+            "train_internal_test_rows": len(internal_train_test_dataset),
             "train_rows": len(train_dataset),
             "eval_rows": len(eval_dataset),
             "total_steps": total_steps,
@@ -742,6 +767,28 @@ def main() -> None:
     save_adapter(model, processor, output_dir, global_step)
     model.save_pretrained(output_dir)
     processor.save_pretrained(output_dir)
+
+    if len(internal_train_test_dataset):
+        print("Scoring train-held internal test split")
+        metrics = evaluate_generation(
+            model=model,
+            processor=processor,
+            dataset=internal_train_test_dataset,
+            prompt=prompt,
+            image_column=image_column,
+            answer_column=answer_column,
+            limit=len(internal_train_test_dataset),
+            max_new_tokens=args.max_new_tokens,
+            image_variant=args.image_variant,
+            enhance_longest_side=args.enhance_longest_side,
+            max_answer_chars=args.max_answer_chars,
+            enable_thinking=args.enable_thinking,
+        )
+        print(
+            f"internal_test_split={args.train_split}-holdout "
+            f"exact_match={metrics['exact_match']:.4f} "
+            f"token_f1={metrics['token_f1']:.4f} n={int(metrics['count'])}"
+        )
 
     if args.internal_test_split:
         print(f"Loading internal test split: {args.dataset} [{args.internal_test_split}]")
