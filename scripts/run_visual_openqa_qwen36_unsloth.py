@@ -75,14 +75,16 @@ from tqdm import tqdm
 
 DEFAULT_MODEL = "unsloth/Qwen3.6-35B-A3B"
 DEFAULT_DATASET = "SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual"
-DEFAULT_PROMPT = """You are answering a visual open-ended exam question.
+DEFAULT_PROMPT = """Answer the visual open-ended exam question in the image.
 
-Read the image carefully, including all question text, diagrams, charts, tables, labels, formulas, and units.
+Read all visible question text, diagrams, charts, tables, labels, formulas, and units.
 
-Learn and follow the structure of the reference answers in training: concise wording, same language as the question when possible, correct units, exact numbers, and no unnecessary sentence framing.
+Output only the final answer, in the same language as the question when possible.
 
-Think internally if needed, but output only the concise final answer text.
-Do not output explanation, reasoning, chain-of-thought, or <think> tags."""
+Use concise exam-answer style. If the question has parts, answer as A), B), C) or 1), 2), 3).
+
+Do not describe the image. Do not say what the user wants. Do not explain your reasoning.
+Do not output chain-of-thought, markdown analysis, bullet planning, or <think> tags."""
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,6 +105,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-new-tokens", type=int, default=192)
     parser.add_argument("--max-answer-chars", type=int, default=1000)
     parser.add_argument("--max-seq-length", type=int, default=2048)
+    parser.add_argument("--answer-prefill", default="FINAL ANSWER:\n")
     parser.add_argument("--load-in-4bit", action="store_true")
     parser.add_argument("--load-in-8bit", action="store_true")
     parser.add_argument("--image-variant", default="enhanced", choices=["original", "enhanced"])
@@ -171,6 +174,8 @@ def select_image_variant(image: Image.Image, variant: str, longest_side: int) ->
 
 def clean_answer(raw_text: str, max_chars: int) -> str:
     text = raw_text.strip()
+    if re.search(r"final\s+answer\s*:", text, flags=re.IGNORECASE):
+        text = re.split(r"final\s+answer\s*:", text, flags=re.IGNORECASE)[-1]
     if re.search(r"</think>", text, flags=re.IGNORECASE):
         text = re.split(r"</think>", text, flags=re.IGNORECASE)[-1]
     else:
@@ -178,6 +183,8 @@ def clean_answer(raw_text: str, max_chars: int) -> str:
     text = re.sub(r"</?think>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"<answer>|</answer>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"^\s*(?:final\s+answer|answer)\s*(?:is|:|-)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:the\s+)?user\s+wants\s+me\s+to\s+[^.:\n]*(?:\.|:)\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*(?:image\s+analysis|problem\s+analysis|analysis)\s*:\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     text = text.strip(" \t\r\n\"'")
     if max_chars > 0 and len(text) > max_chars:
@@ -193,7 +200,7 @@ def normalize_for_match(text: Any) -> str:
     return value
 
 
-def build_inputs(processor: Any, image: Image.Image, prompt: str) -> Dict[str, torch.Tensor]:
+def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill: str) -> Dict[str, torch.Tensor]:
     messages = [
         {
             "role": "user",
@@ -204,6 +211,7 @@ def build_inputs(processor: Any, image: Image.Image, prompt: str) -> Dict[str, t
         }
     ]
     input_text = processor.apply_chat_template(messages, add_generation_prompt=True)
+    input_text += answer_prefill
     return processor(
         image,
         input_text,
@@ -269,7 +277,7 @@ def main() -> None:
             question_id = str(row[id_column])
             image = normalize_image(row[image_column])
             image = select_image_variant(image, args.image_variant, args.enhance_longest_side)
-            inputs = build_inputs(processor, image, prompt).to("cuda")
+            inputs = build_inputs(processor, image, prompt, args.answer_prefill).to("cuda")
 
             with torch.inference_mode():
                 generated_ids = model.generate(
