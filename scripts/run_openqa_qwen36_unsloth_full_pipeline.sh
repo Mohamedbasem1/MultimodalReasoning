@@ -19,7 +19,7 @@ date
 echo
 echo "Installing Unsloth/Qwen3.6 dependencies"
 pip install -U -r requirements-unsloth-qwen36.txt
-pip install --force-reinstall --no-deps "transformers==5.5.0" "trl==0.13.0" "unsloth==2026.5.2" unsloth_zoo
+pip install --force-reinstall --no-deps "transformers==5.5.0" "trl==0.24.0" "unsloth==2026.5.2" unsloth_zoo
 
 echo
 echo "Dependency versions"
@@ -27,7 +27,6 @@ python - <<'PY'
 import builtins
 import transformers
 import trl
-from trl.trainer.utils import ConstantLengthDataset
 from transformers import AutoConfig
 
 try:
@@ -75,7 +74,6 @@ print("trl", trl.__version__)
 print("unsloth import ok")
 cfg = AutoConfig.from_pretrained("unsloth/Qwen3.6-35B-A3B")
 print("model_type", cfg.model_type)
-print("ConstantLengthDataset", ConstantLengthDataset.__name__)
 PY
 
 echo

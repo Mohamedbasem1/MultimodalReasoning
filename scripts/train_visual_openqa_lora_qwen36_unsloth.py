@@ -323,7 +323,7 @@ def main() -> None:
     bf16 = is_bfloat16_supported()
     trainer = SFTTrainer(
         model=model,
-        tokenizer=processor,
+        processing_class=processor,
         data_collator=UnslothVisionDataCollator(
             model,
             processor,
@@ -351,7 +351,7 @@ def main() -> None:
             remove_unused_columns=False,
             dataset_text_field="",
             dataset_kwargs={"skip_prepare_dataset": True},
-            max_seq_length=args.max_seq_length,
+            max_length=args.max_seq_length,
         ),
     )
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
