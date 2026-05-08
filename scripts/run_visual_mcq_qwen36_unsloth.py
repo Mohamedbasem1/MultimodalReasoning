@@ -100,6 +100,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-column", default="auto")
     parser.add_argument("--answer-column", default="answer_key")
     parser.add_argument("--fallback-answer", choices=sorted(ANSWER_KEYS), default="A")
+    parser.add_argument(
+        "--selection-method",
+        choices=["logits", "generate"],
+        default="logits",
+        help="Use next-token option scoring by default; generate keeps the older free-text parser path.",
+    )
     parser.add_argument("--max-new-tokens", type=int, default=8)
     parser.add_argument("--max-seq-length", type=int, default=2048)
     parser.add_argument("--answer-prefill", default="ANSWER: ")
@@ -191,6 +197,37 @@ def normalize_for_match(text: Any) -> str:
     return value if value in ANSWER_KEYS else ""
 
 
+def option_token_ids(processor: Any) -> Dict[str, List[int]]:
+    tokenizer = getattr(processor, "tokenizer", processor)
+    result: Dict[str, List[int]] = {}
+    for key in sorted(ANSWER_KEYS):
+        ids = set()
+        for text in (key, f" {key}", f"{key}.", f"{key})", f"({key})"):
+            token_ids = tokenizer.encode(text, add_special_tokens=False)
+            if len(token_ids) == 1:
+                ids.add(int(token_ids[0]))
+        if not ids:
+            token_ids = tokenizer.encode(key, add_special_tokens=False)
+            if token_ids:
+                ids.add(int(token_ids[0]))
+        result[key] = sorted(ids)
+    return result
+
+
+def score_answer_logits(model: torch.nn.Module, inputs: Dict[str, torch.Tensor], token_ids_by_answer: Dict[str, List[int]], fallback: str) -> tuple[str, Dict[str, float]]:
+    outputs = model(**inputs, use_cache=False, return_dict=True)
+    logits = outputs.logits[0, -1].float()
+    log_probs = torch.log_softmax(logits, dim=-1)
+    scores: Dict[str, float] = {}
+    for answer, token_ids in token_ids_by_answer.items():
+        valid_ids = [token_id for token_id in token_ids if token_id < log_probs.numel()]
+        if valid_ids:
+            scores[answer] = float(log_probs[valid_ids].max().item())
+    if not scores:
+        return fallback, scores
+    return max(scores, key=scores.get), scores
+
+
 def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill: str) -> Dict[str, torch.Tensor]:
     messages = [
         {
@@ -251,6 +288,9 @@ def main() -> None:
         load_in_8bit=args.load_in_8bit,
     )
     FastVisionModel.for_inference(model)
+    token_ids_by_answer = option_token_ids(processor)
+    if args.selection_method == "logits":
+        print(f"Using next-token MCQ scoring with option token IDs: {token_ids_by_answer}")
 
     predictions: List[Dict[str, str]] = []
     correct = 0
@@ -263,20 +303,26 @@ def main() -> None:
             inputs = build_inputs(processor, image, prompt, args.answer_prefill).to("cuda")
 
             with torch.inference_mode():
-                generated_ids = model.generate(
-                    **inputs,
-                    do_sample=False,
-                    max_new_tokens=args.max_new_tokens,
-                    use_cache=True,
-                )
-
-            raw_text = processor.decode(
-                generated_ids[0, inputs["input_ids"].shape[1] :],
-                skip_special_tokens=True,
-            )
-            answer_key = parse_answer(raw_text, args.fallback_answer)
+                if args.selection_method == "logits":
+                    answer_key, scores = score_answer_logits(model, inputs, token_ids_by_answer, args.fallback_answer)
+                    raw_text = ""
+                else:
+                    generated_ids = model.generate(
+                        **inputs,
+                        do_sample=False,
+                        max_new_tokens=args.max_new_tokens,
+                        use_cache=True,
+                    )
+                    raw_text = processor.decode(
+                        generated_ids[0, inputs["input_ids"].shape[1] :],
+                        skip_special_tokens=True,
+                    )
+                    answer_key = parse_answer(raw_text, args.fallback_answer)
+                    scores = {}
             predictions.append({"question_id": question_id, "answer_key": answer_key})
             raw_row = {"question_id": question_id, "answer_key": answer_key, "raw_text": raw_text}
+            if scores:
+                raw_row["scores"] = scores
 
             if has_gold:
                 gold = normalize_for_match(row[args.answer_column])
