@@ -302,6 +302,24 @@ The pipeline installs `requirements-aya-vision.txt`, trains a 600-step QLoRA ada
 outputs/visual_openqa_aya_vision_8b_lora_600_lr5e5_test_official.json
 ```
 
+## Visual OpenQA With Qwen3.6-35B-A3B And Unsloth
+
+`Qwen/Qwen3.6-35B-A3B` is a vision-capable MoE model with 35B total parameters and about 3B activated. This path is experimental and should be run only on a large GPU machine. Start detached, because downloading and training can take a long time.
+
+Run the full unattended pipeline:
+
+```bash
+hf auth login
+nohup bash scripts/run_openqa_qwen36_unsloth_full_pipeline.sh > qwen36_unsloth_openqa.nohup.log 2>&1 &
+tail -f qwen36_unsloth_openqa.nohup.log
+```
+
+The pipeline installs `requirements-unsloth-qwen36.txt`, trains a 300-step Unsloth QLoRA adapter, predicts the blinded test split, converts to official format, and validates the file. The final submission path is:
+
+```bash
+outputs/visual_openqa_qwen36_35b_a3b_unsloth_lora_300_lr3e5_test_official.json
+```
+
 ## Qwen3-VL-8B-Thinking Fine-Tuning
 
 `Qwen/Qwen3-VL-8B-Thinking` is a stronger Normal-category experiment than the Tiny Qwen2.5-VL-7B baseline. It needs the newer Qwen3-VL Transformers code, so use a fresh Lightning Studio or reinstall Transformers before running it.
