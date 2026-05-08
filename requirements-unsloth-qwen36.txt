@@ -8,4 +8,5 @@ torch>=2.4.0
 tqdm>=4.66.0
 trl==0.13.0
 unsloth==2026.5.2
+unsloth_zoo
 git+https://github.com/huggingface/transformers.git
