@@ -173,20 +173,27 @@ def select_image_variant(image: Image.Image, variant: str, longest_side: int) ->
 
 
 def clean_answer(raw_text: str, max_chars: int) -> str:
-    text = raw_text.strip()
-    if re.search(r"final\s+answer\s*:", text, flags=re.IGNORECASE):
-        text = re.split(r"final\s+answer\s*:", text, flags=re.IGNORECASE)[-1]
-    if re.search(r"</think>", text, flags=re.IGNORECASE):
-        text = re.split(r"</think>", text, flags=re.IGNORECASE)[-1]
+    candidates = [raw_text.strip()]
+    if re.search(r"</think>", raw_text, flags=re.IGNORECASE):
+        candidates.extend(part.strip() for part in re.split(r"</think>", raw_text, flags=re.IGNORECASE) if part.strip())
+    cleaned_candidates = []
+    for text in candidates:
+        if re.search(r"final\s+answer\s*:", text, flags=re.IGNORECASE):
+            text = re.split(r"final\s+answer\s*:", text, flags=re.IGNORECASE)[-1]
+        text = re.sub(r"<think>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"</?think>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"<answer>|</answer>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"^\s*(?:final\s+answer|answer)\s*(?:is|:|-)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^\s*(?:the\s+)?user\s+wants\s+me\s+to\s+[^.:\n]*(?:\.|:)\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^\s*(?:image\s+analysis|problem\s+analysis|analysis)\s*:\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip()
+        text = text.strip(" \t\r\n\"'")
+        if text:
+            cleaned_candidates.append(text)
+    if cleaned_candidates:
+        text = max(cleaned_candidates, key=len)
     else:
-        text = re.sub(r"<think>.*", " ", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"</?think>", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"<answer>|</answer>", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*(?:final\s+answer|answer)\s*(?:is|:|-)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*(?:the\s+)?user\s+wants\s+me\s+to\s+[^.:\n]*(?:\.|:)\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^\s*(?:image\s+analysis|problem\s+analysis|analysis)\s*:\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text).strip()
-    text = text.strip(" \t\r\n\"'")
+        text = ""
     if max_chars > 0 and len(text) > max_chars:
         text = text[:max_chars].rstrip()
     return text
