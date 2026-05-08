@@ -25,12 +25,27 @@ pip install --force-reinstall --no-deps "trl==0.13.0"
 echo
 echo "Dependency versions"
 python - <<'PY'
+import builtins
 import transformers
 import trl
 from trl.trainer.utils import ConstantLengthDataset
 from transformers import AutoConfig
+
+try:
+    from transformers.utils import auto_docstring
+except Exception:
+    def auto_docstring(obj=None, *args, **kwargs):
+        if callable(obj):
+            return obj
+        def decorator(inner):
+            return inner
+        return decorator
+builtins.auto_docstring = auto_docstring
+import unsloth
+
 print("transformers", transformers.__version__)
 print("trl", trl.__version__)
+print("unsloth import ok")
 cfg = AutoConfig.from_pretrained("unsloth/Qwen3.6-35B-A3B")
 print("model_type", cfg.model_type)
 print("ConstantLengthDataset", ConstantLengthDataset.__name__)

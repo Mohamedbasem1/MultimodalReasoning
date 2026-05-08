@@ -1,9 +1,30 @@
 import argparse
 import json
 import re
+import builtins
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
+
+def patch_unsloth_transformers_symbols() -> None:
+    """Provide symbols Unsloth expects while patching new Transformers models."""
+    if hasattr(builtins, "auto_docstring"):
+        return
+    try:
+        from transformers.utils import auto_docstring
+    except Exception:
+        def auto_docstring(obj=None, *args, **kwargs):
+            if callable(obj):
+                return obj
+
+            def decorator(inner):
+                return inner
+
+            return decorator
+    builtins.auto_docstring = auto_docstring
+
+
+patch_unsloth_transformers_symbols()
 import unsloth  # noqa: F401
 import torch
 from datasets import load_dataset
