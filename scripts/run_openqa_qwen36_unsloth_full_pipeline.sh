@@ -19,6 +19,14 @@ date
 echo
 echo "Installing Unsloth/Qwen3.6 dependencies"
 pip install -U -r requirements-unsloth-qwen36.txt
+pip install -U git+https://github.com/huggingface/transformers.git
+
+echo
+echo "Dependency versions"
+python - <<'PY'
+import transformers
+print("transformers", transformers.__version__)
+PY
 
 echo
 echo "Training Qwen3.6-35B-A3B OpenQA LoRA with Unsloth"

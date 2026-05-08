@@ -5,12 +5,13 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+import unsloth  # noqa: F401
 import torch
 from datasets import Dataset, load_dataset
 from PIL import Image, ImageEnhance, ImageFilter
 
 
-DEFAULT_MODEL = "Qwen/Qwen3.6-35B-A3B"
+DEFAULT_MODEL = "unsloth/Qwen3.6-35B-A3B"
 DEFAULT_DATASET = "SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual"
 DEFAULT_PROMPT = """You are answering a visual open-ended exam question.
 

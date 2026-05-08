@@ -304,7 +304,7 @@ outputs/visual_openqa_aya_vision_8b_lora_600_lr5e5_test_official.json
 
 ## Visual OpenQA With Qwen3.6-35B-A3B And Unsloth
 
-`Qwen/Qwen3.6-35B-A3B` is a vision-capable MoE model with 35B total parameters and about 3B activated. This path is experimental and should be run only on a large GPU machine. Start detached, because downloading and training can take a long time.
+`unsloth/Qwen3.6-35B-A3B` is a vision-capable MoE model with 35B total parameters and about 3B activated. This path is experimental and should be run only on a large GPU machine. Start detached, because downloading and training can take a long time.
 
 Run the full unattended pipeline:
 
