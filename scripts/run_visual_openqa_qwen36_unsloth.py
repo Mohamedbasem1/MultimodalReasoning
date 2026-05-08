@@ -38,6 +38,17 @@ def patch_unsloth_transformers_symbols() -> None:
         def interval(*args, default=None, **kwargs):
             return default
     builtins.interval = interval
+    try:
+        from transformers import PreTrainedConfig
+    except Exception:
+        from transformers import PretrainedConfig as PreTrainedConfig
+    builtins.PreTrainedConfig = PreTrainedConfig
+    builtins.PretrainedConfig = PreTrainedConfig
+    try:
+        from transformers.modeling_rope_utils import RopeParameters
+        builtins.RopeParameters = RopeParameters
+    except Exception:
+        pass
 
 
 patch_unsloth_transformers_symbols()

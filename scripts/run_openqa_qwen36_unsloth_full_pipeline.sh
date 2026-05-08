@@ -57,9 +57,21 @@ except Exception:
     def interval(*args, default=None, **kwargs):
         return default
 builtins.interval = interval
+try:
+    from transformers import PreTrainedConfig
+except Exception:
+    from transformers import PretrainedConfig as PreTrainedConfig
+builtins.PreTrainedConfig = PreTrainedConfig
+builtins.PretrainedConfig = PreTrainedConfig
+try:
+    from transformers.modeling_rope_utils import RopeParameters
+    builtins.RopeParameters = RopeParameters
+except Exception:
+    pass
 import unsloth
 
 print("transformers", transformers.__version__)
+print("unsloth", getattr(unsloth, "__version__", "unknown"))
 print("trl", trl.__version__)
 print("unsloth import ok")
 cfg = AutoConfig.from_pretrained("unsloth/Qwen3.6-35B-A3B")
