@@ -10,6 +10,17 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 def patch_unsloth_transformers_symbols() -> None:
     """Provide symbols Unsloth expects while patching new Transformers models."""
     try:
+        import os
+        import huggingface_hub
+        if not hasattr(huggingface_hub, "is_offline_mode"):
+            def is_offline_mode() -> bool:
+                value = os.environ.get("HF_HUB_OFFLINE") or os.environ.get("TRANSFORMERS_OFFLINE") or ""
+                return value.upper() in {"1", "ON", "YES", "TRUE"}
+
+            huggingface_hub.is_offline_mode = is_offline_mode
+    except Exception:
+        pass
+    try:
         from transformers.utils import auto_docstring
     except Exception:
         def auto_docstring(obj=None, *args, **kwargs):

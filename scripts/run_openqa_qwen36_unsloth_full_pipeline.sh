@@ -25,6 +25,16 @@ echo
 echo "Dependency versions"
 python - <<'PY'
 import builtins
+import os
+import huggingface_hub
+
+if not hasattr(huggingface_hub, "is_offline_mode"):
+    def is_offline_mode() -> bool:
+        value = os.environ.get("HF_HUB_OFFLINE") or os.environ.get("TRANSFORMERS_OFFLINE") or ""
+        return value.upper() in {"1", "ON", "YES", "TRUE"}
+
+    huggingface_hub.is_offline_mode = is_offline_mode
+
 import transformers
 import trl
 from transformers import AutoConfig
