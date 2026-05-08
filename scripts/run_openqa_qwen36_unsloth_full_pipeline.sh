@@ -19,9 +19,7 @@ date
 echo
 echo "Installing Unsloth/Qwen3.6 dependencies"
 pip install -U -r requirements-unsloth-qwen36.txt
-pip install -U git+https://github.com/huggingface/transformers.git
-pip install --force-reinstall --no-deps "trl==0.13.0"
-pip install --upgrade --force-reinstall --no-cache-dir --no-deps unsloth unsloth_zoo
+pip install --force-reinstall --no-deps "transformers==5.5.0" "trl==0.13.0" "unsloth==2026.5.2" unsloth_zoo
 
 echo
 echo "Dependency versions"
