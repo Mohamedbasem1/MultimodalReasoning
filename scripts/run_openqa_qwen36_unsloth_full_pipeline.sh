@@ -20,12 +20,20 @@ echo
 echo "Installing Unsloth/Qwen3.6 dependencies"
 pip install -U -r requirements-unsloth-qwen36.txt
 pip install -U git+https://github.com/huggingface/transformers.git
+pip install --force-reinstall --no-deps "trl==0.13.0"
 
 echo
 echo "Dependency versions"
 python - <<'PY'
 import transformers
+import trl
+from trl.trainer.utils import ConstantLengthDataset
+from transformers import AutoConfig
 print("transformers", transformers.__version__)
+print("trl", trl.__version__)
+cfg = AutoConfig.from_pretrained("unsloth/Qwen3.6-35B-A3B")
+print("model_type", cfg.model_type)
+print("ConstantLengthDataset", ConstantLengthDataset.__name__)
 PY
 
 echo
