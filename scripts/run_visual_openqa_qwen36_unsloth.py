@@ -1,15 +1,18 @@
 import argparse
 import json
+import os
 import re
 import builtins
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 
+os.environ.setdefault("UNSLOTH_MOE_BACKEND", "native_torch")
+
+
 def patch_unsloth_transformers_symbols() -> None:
     """Provide symbols Unsloth expects while patching new Transformers models."""
     try:
-        import os
         import huggingface_hub
         if not hasattr(huggingface_hub, "is_offline_mode"):
             def is_offline_mode() -> bool:

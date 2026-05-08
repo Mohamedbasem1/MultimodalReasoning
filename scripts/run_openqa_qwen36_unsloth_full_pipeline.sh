@@ -11,6 +11,7 @@ LOG_FILE="${LOG_DIR}/qwen36_unsloth_openqa_full_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "${LOG_DIR}" outputs
 
 exec > >(tee -a "${LOG_FILE}") 2>&1
+export UNSLOTH_MOE_BACKEND="${UNSLOTH_MOE_BACKEND:-native_torch}"
 
 echo "Starting Qwen3.6-35B-A3B Unsloth OpenQA pipeline"
 echo "Log: ${LOG_FILE}"
@@ -81,6 +82,7 @@ import unsloth
 print("transformers", transformers.__version__)
 print("unsloth", getattr(unsloth, "__version__", "unknown"))
 print("trl", trl.__version__)
+print("UNSLOTH_MOE_BACKEND", os.environ.get("UNSLOTH_MOE_BACKEND"))
 print("unsloth import ok")
 cfg = AutoConfig.from_pretrained("unsloth/Qwen3.6-35B-A3B")
 print("model_type", cfg.model_type)
