@@ -41,6 +41,22 @@ except Exception:
             return inner
         return decorator
 builtins.auto_docstring = auto_docstring
+try:
+    from huggingface_hub.dataclasses import strict
+except Exception:
+    def strict(obj=None, *args, **kwargs):
+        if callable(obj):
+            return obj
+        def decorator(inner):
+            return inner
+        return decorator
+builtins.strict = strict
+try:
+    from transformers.utils.type_validators import interval
+except Exception:
+    def interval(*args, default=None, **kwargs):
+        return default
+builtins.interval = interval
 import unsloth
 
 print("transformers", transformers.__version__)

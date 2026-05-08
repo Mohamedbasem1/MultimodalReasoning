@@ -9,8 +9,6 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 def patch_unsloth_transformers_symbols() -> None:
     """Provide symbols Unsloth expects while patching new Transformers models."""
-    if hasattr(builtins, "auto_docstring"):
-        return
     try:
         from transformers.utils import auto_docstring
     except Exception:
@@ -23,6 +21,24 @@ def patch_unsloth_transformers_symbols() -> None:
 
             return decorator
     builtins.auto_docstring = auto_docstring
+    try:
+        from huggingface_hub.dataclasses import strict
+    except Exception:
+        def strict(obj=None, *args, **kwargs):
+            if callable(obj):
+                return obj
+
+            def decorator(inner):
+                return inner
+
+            return decorator
+    builtins.strict = strict
+    try:
+        from transformers.utils.type_validators import interval
+    except Exception:
+        def interval(*args, default=None, **kwargs):
+            return default
+    builtins.interval = interval
 
 
 patch_unsloth_transformers_symbols()
