@@ -189,6 +189,23 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
         return from_pretrained_with_dtype_retry(AutoModelForCausalLM, args.model, kwargs)
 
 
+def repair_meta_rotary_tensors(model: torch.nn.Module) -> int:
+    repaired = 0
+    for module in model.modules():
+        inv_freq = getattr(module, "inv_freq", None)
+        if not torch.is_tensor(inv_freq) or inv_freq.device.type != "meta":
+            continue
+        dim = int(inv_freq.numel()) * 2
+        if dim <= 0:
+            continue
+        theta = float(getattr(module, "theta", getattr(module, "base", 10000.0)))
+        module.inv_freq = 1.0 / theta ** (
+            torch.arange(start=0, end=dim, step=2, dtype=torch.float32) / dim
+        )
+        repaired += 1
+    return repaired
+
+
 def model_device(model: torch.nn.Module) -> torch.device:
     model_device_attr = getattr(model, "device", None)
     if isinstance(model_device_attr, torch.device) and model_device_attr.type != "meta":
@@ -415,6 +432,9 @@ def main() -> None:
     print(f"Loading model: {args.model}")
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
     model = load_model(args)
+    repaired_rotary_tensors = repair_meta_rotary_tensors(model)
+    if repaired_rotary_tensors:
+        print(f"Repaired {repaired_rotary_tensors} meta rotary tensor(s).")
     add_image_preprocess = getattr(model, "add_image_preprocess", None)
     if callable(add_image_preprocess):
         add_image_preprocess(processor)
