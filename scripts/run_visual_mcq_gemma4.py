@@ -211,6 +211,17 @@ def patch_ernie_vision_forward(model: torch.nn.Module) -> bool:
     if not hasattr(model, "vision_forward") or not hasattr(model, "vision_model"):
         return False
 
+    def vision_tensor_target(vision_model: torch.nn.Module, fallback_device: torch.device) -> Tuple[torch.device, torch.dtype]:
+        target_device = fallback_device
+        target_dtype = torch.bfloat16
+        for parameter in vision_model.parameters():
+            if parameter.device.type != "meta":
+                target_device = parameter.device
+                if parameter.dtype.is_floating_point:
+                    target_dtype = parameter.dtype
+                break
+        return target_device, target_dtype
+
     def vision_forward(self: torch.nn.Module, images: torch.Tensor, image_position_ids: torch.Tensor, image_attention_mask: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         image_preprocess = getattr(self, "image_preprocess", None)
         if image_preprocess is not None and images.dtype == torch.uint8:
@@ -233,6 +244,10 @@ def patch_ernie_vision_forward(model: torch.nn.Module) -> bool:
                 [1, 0, 0, 0],
                 value=1,
             )
+        target_device, target_dtype = vision_tensor_target(self.vision_model, images.device)
+        images = images.to(device=target_device, dtype=target_dtype)
+        if grid_thw is not None:
+            grid_thw = grid_thw.to(target_device)
         return self.vision_model(images, grid_thw)
 
     model.vision_forward = vision_forward.__get__(model, model.__class__)
