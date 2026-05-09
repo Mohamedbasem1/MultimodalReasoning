@@ -46,6 +46,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--torch-dtype", default="auto", choices=["auto", "bfloat16", "float16", "float32"])
     parser.add_argument("--attn-implementation", default=None, choices=[None, "sdpa", "eager", "flash_attention_2"])
+    parser.add_argument(
+        "--trust-remote-code",
+        action="store_true",
+        help="Allow custom model/processor code. Required for some newer VLMs such as ERNIE 4.5 VL.",
+    )
     parser.add_argument("--image-variant", default="enhanced", choices=["original", "enhanced"])
     parser.add_argument("--enhance-longest-side", type=int, default=1000)
     return parser.parse_args()
@@ -131,6 +136,7 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
     kwargs: Dict[str, Any] = {
         "dtype": dtype_from_arg(args.torch_dtype),
         "device_map": args.device_map,
+        "trust_remote_code": args.trust_remote_code,
     }
     if args.attn_implementation:
         kwargs["attn_implementation"] = args.attn_implementation
@@ -331,7 +337,7 @@ def main() -> None:
         print(f"Gold column: {args.answer_column}")
 
     print(f"Loading model: {args.model}")
-    processor = AutoProcessor.from_pretrained(args.model)
+    processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
     model = load_model(args)
     device = model_device(model)
     token_ids_by_answer = option_token_ids(processor)
