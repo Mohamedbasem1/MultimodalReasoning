@@ -191,9 +191,15 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
 
 def model_device(model: torch.nn.Module) -> torch.device:
     model_device_attr = getattr(model, "device", None)
-    if isinstance(model_device_attr, torch.device):
+    if isinstance(model_device_attr, torch.device) and model_device_attr.type != "meta":
         return model_device_attr
-    return next(model.parameters()).device
+    for parameter in model.parameters():
+        if parameter.device.type != "meta":
+            return parameter.device
+    for buffer in model.buffers():
+        if buffer.device.type != "meta":
+            return buffer.device
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def move_batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
