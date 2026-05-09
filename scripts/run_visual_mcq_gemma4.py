@@ -1,6 +1,8 @@
 import argparse
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -311,8 +313,8 @@ def processor_call_with_vision(processor: Any, messages: List[Dict[str, Any]], t
     )
 
 
-def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill: str) -> Dict[str, Any]:
-    messages = build_ernie_messages(image, prompt)
+def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill: str, image_path: Optional[str] = None) -> Dict[str, Any]:
+    messages = build_ernie_messages(image, prompt, image_path=image_path)
     text = apply_chat_template_text(processor, messages) + answer_prefill
     vision_inputs = processor_call_with_vision(processor, messages, text)
     if vision_inputs is not None:
@@ -323,8 +325,8 @@ def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill
         return processor(text=text, images=image, return_tensors="pt")
 
 
-def build_generate_inputs(processor: Any, image: Image.Image, prompt: str) -> Dict[str, Any]:
-    messages = build_ernie_messages(image, prompt)
+def build_generate_inputs(processor: Any, image: Image.Image, prompt: str, image_path: Optional[str] = None) -> Dict[str, Any]:
+    messages = build_ernie_messages(image, prompt, image_path=image_path)
     text = apply_chat_template_text(processor, messages)
     vision_inputs = processor_call_with_vision(processor, messages, text)
     if vision_inputs is not None:
@@ -363,6 +365,16 @@ def decode_response(processor: Any, output_ids: torch.Tensor, input_len: int) ->
         except Exception:
             pass
     return response
+
+
+def save_temp_image_for_processor(image: Image.Image, processor: Any) -> Optional[str]:
+    if not callable(getattr(processor, "process_vision_info", None)):
+        return None
+    handle = tempfile.NamedTemporaryFile(prefix="ernie_vl_", suffix=".png", delete=False)
+    temp_path = handle.name
+    handle.close()
+    image.save(temp_path)
+    return temp_path
 
 
 def main() -> None:
@@ -413,23 +425,34 @@ def main() -> None:
         for row in tqdm(dataset, desc="Gemma4-MCQ"):
             question_id = str(row[id_column])
             image = select_image_variant(normalize_image(row[image_column]), args.image_variant, args.enhance_longest_side)
+            temp_image_path = save_temp_image_for_processor(image, processor)
 
-            with torch.inference_mode():
-                if args.selection_method == "logits":
-                    inputs = move_batch_to_device(build_inputs(processor, image, prompt, args.answer_prefill), device)
-                    answer_key, scores = score_answer_logits(model, inputs, token_ids_by_answer, args.fallback_answer)
-                    raw_text = ""
-                else:
-                    inputs = move_batch_to_device(build_generate_inputs(processor, image, prompt), device)
-                    input_len = inputs["input_ids"].shape[-1]
-                    outputs = model.generate(
-                        **inputs,
-                        do_sample=False,
-                        max_new_tokens=args.max_new_tokens,
-                    )
-                    raw_text = decode_response(processor, outputs[0], input_len)
-                    answer_key = parse_answer(raw_text, args.fallback_answer)
-                    scores = {}
+            try:
+                with torch.inference_mode():
+                    if args.selection_method == "logits":
+                        inputs = move_batch_to_device(
+                            build_inputs(processor, image, prompt, args.answer_prefill, image_path=temp_image_path),
+                            device,
+                        )
+                        answer_key, scores = score_answer_logits(model, inputs, token_ids_by_answer, args.fallback_answer)
+                        raw_text = ""
+                    else:
+                        inputs = move_batch_to_device(
+                            build_generate_inputs(processor, image, prompt, image_path=temp_image_path),
+                            device,
+                        )
+                        input_len = inputs["input_ids"].shape[-1]
+                        outputs = model.generate(
+                            **inputs,
+                            do_sample=False,
+                            max_new_tokens=args.max_new_tokens,
+                        )
+                        raw_text = decode_response(processor, outputs[0], input_len)
+                        answer_key = parse_answer(raw_text, args.fallback_answer)
+                        scores = {}
+            finally:
+                if temp_image_path and os.path.exists(temp_image_path):
+                    os.remove(temp_image_path)
 
             predictions.append({"question_id": question_id, "answer_key": answer_key})
             raw_row = {"question_id": question_id, "answer_key": answer_key, "raw_text": raw_text}
