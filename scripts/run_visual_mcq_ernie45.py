@@ -161,6 +161,22 @@ def move_inputs(inputs: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
     return {key: value.to(device) if torch.is_tensor(value) else value for key, value in inputs.items()}
 
 
+def align_token_type_ids_for_forward(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    input_ids = inputs.get("input_ids")
+    token_type_ids = inputs.get("token_type_ids")
+    if not torch.is_tensor(input_ids) or not torch.is_tensor(token_type_ids):
+        return inputs
+    if token_type_ids.shape[-1] != input_ids.shape[-1]:
+        return inputs
+    extra = torch.zeros(
+        (*token_type_ids.shape[:-1], 1),
+        dtype=token_type_ids.dtype,
+        device=token_type_ids.device,
+    )
+    inputs["token_type_ids"] = torch.cat([token_type_ids, extra], dim=-1)
+    return inputs
+
+
 def main() -> None:
     args = parse_args()
     output_path = Path(args.output)
@@ -218,7 +234,10 @@ def main() -> None:
             try:
                 with torch.inference_mode():
                     if args.selection_method == "logits":
-                        inputs = move_inputs(build_inputs(processor, temp_image_path, prompt, args.answer_prefill), device)
+                        inputs = align_token_type_ids_for_forward(
+                            build_inputs(processor, temp_image_path, prompt, args.answer_prefill)
+                        )
+                        inputs = move_inputs(inputs, device)
                         answer_key, scores = score_answer_logits(model, inputs, token_ids_by_answer, args.fallback_answer)
                         raw_text = ""
                     else:
