@@ -2,7 +2,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 from datasets import load_dataset
@@ -46,6 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--torch-dtype", default="auto", choices=["auto", "bfloat16", "float16", "float32"])
     parser.add_argument("--attn-implementation", default=None, choices=[None, "sdpa", "eager", "flash_attention_2"])
+    parser.add_argument(
+        "--model-loader",
+        choices=["auto", "image-text-to-text", "causal-lm"],
+        default="auto",
+        help="ERNIE 4.5 VL currently needs causal-lm despite being an image-text-to-text model.",
+    )
     parser.add_argument(
         "--trust-remote-code",
         action="store_true",
@@ -125,14 +131,7 @@ def dtype_from_arg(dtype_name: str) -> Any:
     raise ValueError(f"Unsupported dtype: {dtype_name}")
 
 
-def load_model(args: argparse.Namespace) -> torch.nn.Module:
-    try:
-        from transformers import AutoModelForImageTextToText
-        model_cls = AutoModelForImageTextToText
-    except ImportError:
-        from transformers import AutoModelForMultimodalLM
-        model_cls = AutoModelForMultimodalLM
-
+def model_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {
         "dtype": dtype_from_arg(args.torch_dtype),
         "device_map": args.device_map,
@@ -149,15 +148,43 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_quant_type="nf4",
         )
+    return kwargs
 
+
+def from_pretrained_with_dtype_retry(model_cls: Any, model_name: str, kwargs: Dict[str, Any]) -> torch.nn.Module:
     try:
-        return model_cls.from_pretrained(args.model, **kwargs).eval()
+        return model_cls.from_pretrained(model_name, **kwargs).eval()
     except TypeError as exc:
         if "dtype" not in str(exc) or "dtype" not in kwargs:
             raise
         retry_kwargs = dict(kwargs)
         retry_kwargs["torch_dtype"] = retry_kwargs.pop("dtype")
-        return model_cls.from_pretrained(args.model, **retry_kwargs).eval()
+        return model_cls.from_pretrained(model_name, **retry_kwargs).eval()
+
+
+def load_model(args: argparse.Namespace) -> torch.nn.Module:
+    kwargs = model_kwargs(args)
+    if args.model_loader == "causal-lm":
+        from transformers import AutoModelForCausalLM
+
+        return from_pretrained_with_dtype_retry(AutoModelForCausalLM, args.model, kwargs)
+
+    try:
+        from transformers import AutoModelForImageTextToText
+        image_model_cls = AutoModelForImageTextToText
+    except ImportError:
+        from transformers import AutoModelForMultimodalLM
+        image_model_cls = AutoModelForMultimodalLM
+
+    try:
+        return from_pretrained_with_dtype_retry(image_model_cls, args.model, kwargs)
+    except ValueError as exc:
+        if args.model_loader != "auto":
+            raise
+        print(f"Warning: image-text loader failed, retrying with AutoModelForCausalLM: {exc}")
+        from transformers import AutoModelForCausalLM
+
+        return from_pretrained_with_dtype_retry(AutoModelForCausalLM, args.model, kwargs)
 
 
 def model_device(model: torch.nn.Module) -> torch.device:
@@ -229,6 +256,16 @@ def score_answer_logits(
 
 
 def apply_chat_template_text(processor: Any, messages: List[Dict[str, Any]]) -> str:
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+        try:
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except TypeError:
+            pass
     try:
         return processor.apply_chat_template(
             messages,
@@ -244,17 +281,42 @@ def apply_chat_template_text(processor: Any, messages: List[Dict[str, Any]]) -> 
         )
 
 
-def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill: str) -> Dict[str, Any]:
-    messages = [
+def build_ernie_messages(image: Image.Image, prompt: str, image_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    if image_path:
+        image_content = {"type": "image_url", "image_url": {"url": image_path}}
+    else:
+        image_content = {"type": "image", "image": image}
+    return [
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": image},
                 {"type": "text", "text": prompt},
+                image_content,
             ],
         }
     ]
+
+
+def processor_call_with_vision(processor: Any, messages: List[Dict[str, Any]], text: str) -> Optional[Dict[str, Any]]:
+    process_vision_info = getattr(processor, "process_vision_info", None)
+    if not callable(process_vision_info):
+        return None
+    image_inputs, video_inputs = process_vision_info(messages)
+    return processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    )
+
+
+def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill: str) -> Dict[str, Any]:
+    messages = build_ernie_messages(image, prompt)
     text = apply_chat_template_text(processor, messages) + answer_prefill
+    vision_inputs = processor_call_with_vision(processor, messages, text)
+    if vision_inputs is not None:
+        return vision_inputs
     try:
         return processor(text=[text], images=[image], return_tensors="pt")
     except TypeError:
@@ -262,15 +324,11 @@ def build_inputs(processor: Any, image: Image.Image, prompt: str, answer_prefill
 
 
 def build_generate_inputs(processor: Any, image: Image.Image, prompt: str) -> Dict[str, Any]:
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt},
-            ],
-        }
-    ]
+    messages = build_ernie_messages(image, prompt)
+    text = apply_chat_template_text(processor, messages)
+    vision_inputs = processor_call_with_vision(processor, messages, text)
+    if vision_inputs is not None:
+        return vision_inputs
     try:
         return processor.apply_chat_template(
             messages,
@@ -339,6 +397,9 @@ def main() -> None:
     print(f"Loading model: {args.model}")
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
     model = load_model(args)
+    add_image_preprocess = getattr(model, "add_image_preprocess", None)
+    if callable(add_image_preprocess):
+        add_image_preprocess(processor)
     device = model_device(model)
     token_ids_by_answer = option_token_ids(processor)
     if args.selection_method == "logits":
