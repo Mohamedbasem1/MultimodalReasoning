@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
+import torch.nn.functional as F
 from datasets import load_dataset
 from PIL import Image, ImageEnhance, ImageFilter
 from tqdm import tqdm
@@ -206,10 +207,48 @@ def repair_meta_rotary_tensors(model: torch.nn.Module) -> int:
     return repaired
 
 
+def patch_ernie_vision_forward(model: torch.nn.Module) -> bool:
+    if not hasattr(model, "vision_forward") or not hasattr(model, "vision_model"):
+        return False
+
+    def vision_forward(self: torch.nn.Module, images: torch.Tensor, image_position_ids: torch.Tensor, image_attention_mask: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
+        image_preprocess = getattr(self, "image_preprocess", None)
+        if image_preprocess is not None and images.dtype == torch.uint8:
+            current_device = images.device
+            image_mean_tensor = image_preprocess.image_mean_tensor.to(current_device)
+            image_std_tensor = image_preprocess.image_std_tensor.to(current_device)
+            rescale_factor = image_preprocess.rescale_factor
+            if torch.is_tensor(rescale_factor):
+                rescale_factor = rescale_factor.to(current_device)
+            images = rescale_factor * images.to(torch.float32)
+            images = (images - image_mean_tensor) / image_std_tensor
+            images = images.to(torch.bfloat16)
+        elif images.dtype != torch.bfloat16:
+            images = images.to(torch.bfloat16)
+
+        if grid_thw is not None:
+            grid_thw = grid_thw[grid_thw > 0].reshape([-1, 3])
+            grid_thw = F.pad(
+                torch.repeat_interleave(grid_thw[:, 1:], grid_thw[:, 0], 0),
+                [1, 0, 0, 0],
+                value=1,
+            )
+        return self.vision_model(images, grid_thw)
+
+    model.vision_forward = vision_forward.__get__(model, model.__class__)
+    return True
+
+
 def model_device(model: torch.nn.Module) -> torch.device:
     model_device_attr = getattr(model, "device", None)
     if isinstance(model_device_attr, torch.device) and model_device_attr.type != "meta":
         return model_device_attr
+    for parameter in model.parameters():
+        if parameter.device.type == "cuda":
+            return parameter.device
+    for buffer in model.buffers():
+        if buffer.device.type == "cuda":
+            return buffer.device
     for parameter in model.parameters():
         if parameter.device.type != "meta":
             return parameter.device
@@ -230,7 +269,7 @@ def model_float_dtype(model: torch.nn.Module) -> torch.dtype:
 
 
 def move_batch_to_device(batch: Dict[str, Any], device: torch.device, float_dtype: Optional[torch.dtype] = None) -> Dict[str, Any]:
-    vision_float_keys = {"images", "videos", "pixel_values", "pixel_values_videos"}
+    vision_float_keys = {"pixel_values", "pixel_values_videos"}
     moved: Dict[str, Any] = {}
     for key, value in batch.items():
         if not torch.is_tensor(value):
@@ -458,6 +497,8 @@ def main() -> None:
     add_image_preprocess = getattr(model, "add_image_preprocess", None)
     if callable(add_image_preprocess):
         add_image_preprocess(processor)
+    if args.trust_remote_code and "ernie" in args.model.lower() and patch_ernie_vision_forward(model):
+        print("Patched ERNIE vision preprocessing.")
     device = model_device(model)
     input_float_dtype = model_float_dtype(model)
     token_ids_by_answer = option_token_ids(processor)
