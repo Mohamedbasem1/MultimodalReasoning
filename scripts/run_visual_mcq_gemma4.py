@@ -219,8 +219,28 @@ def model_device(model: torch.nn.Module) -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def move_batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
-    return {key: value.to(device) if torch.is_tensor(value) else value for key, value in batch.items()}
+def model_float_dtype(model: torch.nn.Module) -> torch.dtype:
+    for parameter in model.parameters():
+        if parameter.device.type != "meta" and parameter.dtype.is_floating_point:
+            return parameter.dtype
+    for buffer in model.buffers():
+        if buffer.device.type != "meta" and buffer.dtype.is_floating_point:
+            return buffer.dtype
+    return torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+
+def move_batch_to_device(batch: Dict[str, Any], device: torch.device, float_dtype: Optional[torch.dtype] = None) -> Dict[str, Any]:
+    vision_float_keys = {"images", "videos", "pixel_values", "pixel_values_videos"}
+    moved: Dict[str, Any] = {}
+    for key, value in batch.items():
+        if not torch.is_tensor(value):
+            moved[key] = value
+            continue
+        if key in vision_float_keys and float_dtype is not None:
+            moved[key] = value.to(device=device, dtype=float_dtype)
+        else:
+            moved[key] = value.to(device)
+    return moved
 
 
 def parse_answer(raw_text: str, fallback: str) -> str:
@@ -439,6 +459,7 @@ def main() -> None:
     if callable(add_image_preprocess):
         add_image_preprocess(processor)
     device = model_device(model)
+    input_float_dtype = model_float_dtype(model)
     token_ids_by_answer = option_token_ids(processor)
     if args.selection_method == "logits":
         print(f"Using next-token MCQ scoring with option token IDs: {token_ids_by_answer}")
@@ -459,6 +480,7 @@ def main() -> None:
                         inputs = move_batch_to_device(
                             build_inputs(processor, image, prompt, args.answer_prefill, image_path=temp_image_path),
                             device,
+                            input_float_dtype,
                         )
                         answer_key, scores = score_answer_logits(model, inputs, token_ids_by_answer, args.fallback_answer)
                         raw_text = ""
@@ -466,6 +488,7 @@ def main() -> None:
                         inputs = move_batch_to_device(
                             build_generate_inputs(processor, image, prompt, image_path=temp_image_path),
                             device,
+                            input_float_dtype,
                         )
                         input_len = inputs["input_ids"].shape[-1]
                         outputs = model.generate(
