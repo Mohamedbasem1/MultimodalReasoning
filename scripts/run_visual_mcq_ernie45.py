@@ -19,6 +19,7 @@ from run_visual_mcq_gemma4 import (
     normalize_for_match,
     normalize_image,
     option_token_ids,
+    patch_ernie_vision_forward,
     parse_answer,
     pick_column,
     repair_meta_rotary_tensors,
@@ -193,6 +194,8 @@ def main() -> None:
     if callable(add_image_preprocess):
         add_image_preprocess(processor)
         print("Registered ERNIE image preprocessing.")
+    if patch_ernie_vision_forward(model):
+        print("Patched ERNIE vision preprocessing.")
     repaired = repair_meta_rotary_tensors(model)
     if repaired:
         print(f"Repaired {repaired} meta rotary tensor(s).")
