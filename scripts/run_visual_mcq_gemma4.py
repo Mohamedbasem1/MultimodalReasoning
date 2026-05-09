@@ -211,6 +211,17 @@ def patch_ernie_vision_forward(model: torch.nn.Module) -> bool:
     if not hasattr(model, "vision_forward") or not hasattr(model, "vision_model"):
         return False
 
+    patch_embed = getattr(getattr(model, "vision_model", None), "patch_embed", None)
+    patch_proj = getattr(patch_embed, "proj", None)
+    if patch_embed is not None and patch_proj is not None:
+        def patch_embed_forward(self: torch.nn.Module, hidden_states: torch.Tensor) -> torch.Tensor:
+            weight = getattr(self.proj, "weight", None)
+            target_device = weight.device if torch.is_tensor(weight) and weight.device.type != "meta" else hidden_states.device
+            target_dtype = weight.dtype if torch.is_tensor(weight) and weight.dtype.is_floating_point else torch.bfloat16
+            return self.proj(hidden_states.to(device=target_device, dtype=target_dtype))
+
+        patch_embed.forward = patch_embed_forward.__get__(patch_embed, patch_embed.__class__)
+
     def vision_tensor_target(vision_model: torch.nn.Module, fallback_device: torch.device) -> Tuple[torch.device, torch.dtype]:
         target_device = fallback_device
         target_dtype = torch.bfloat16
