@@ -207,6 +207,49 @@ def repair_meta_rotary_tensors(model: torch.nn.Module) -> int:
     return repaired
 
 
+def enable_meta_nonzero_fallback() -> bool:
+    try:
+        import torch.fx.experimental._config as fx_config
+
+        fx_config.meta_nonzero_assume_all_nonzero = True
+        return True
+    except Exception:
+        return False
+
+
+def repair_ernie_moe_meta_masks(model: torch.nn.Module) -> int:
+    moe_num_experts = getattr(getattr(model, "config", None), "moe_num_experts", None)
+    if not isinstance(moe_num_experts, (list, tuple)) or not moe_num_experts:
+        return 0
+
+    total_experts = int(sum(int(value) for value in moe_num_experts))
+    if total_experts <= 0:
+        return 0
+
+    device = model_device(model)
+    template_masks = []
+    offset = 0
+    for count in moe_num_experts:
+        count = int(count)
+        mask = torch.zeros(total_experts, dtype=torch.bool, device=device)
+        mask[offset : offset + count] = True
+        template_masks.append(mask)
+        offset += count
+
+    repaired = 0
+    for module in model.modules():
+        masks = getattr(module, "experts_type_mask", None)
+        if not isinstance(masks, (list, tuple)):
+            continue
+        if not any(torch.is_tensor(mask) and mask.device.type == "meta" for mask in masks):
+            continue
+        if len(masks) != len(template_masks):
+            continue
+        module.experts_type_mask = [mask.clone() for mask in template_masks]
+        repaired += 1
+    return repaired
+
+
 def patch_ernie_vision_forward(model: torch.nn.Module) -> bool:
     if not hasattr(model, "vision_forward") or not hasattr(model, "vision_model"):
         return False

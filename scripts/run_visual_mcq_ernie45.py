@@ -15,6 +15,7 @@ from run_visual_mcq_gemma4 import (
     ANSWER_KEYS,
     decode_response,
     dtype_from_arg,
+    enable_meta_nonzero_fallback,
     load_prompt,
     normalize_for_match,
     normalize_image,
@@ -22,6 +23,7 @@ from run_visual_mcq_gemma4 import (
     patch_ernie_vision_forward,
     parse_answer,
     pick_column,
+    repair_ernie_moe_meta_masks,
     repair_meta_rotary_tensors,
     score_answer_logits,
     select_image_variant,
@@ -204,6 +206,8 @@ def main() -> None:
         print(f"Gold column: {args.answer_column}")
 
     print(f"Loading model: {args.model}")
+    if enable_meta_nonzero_fallback():
+        print("Enabled PyTorch meta nonzero fallback.")
     processor = AutoProcessor.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
     model = load_model(args)
     add_image_preprocess = getattr(model, "add_image_preprocess", None)
@@ -215,6 +219,9 @@ def main() -> None:
     repaired = repair_meta_rotary_tensors(model)
     if repaired:
         print(f"Repaired {repaired} meta rotary tensor(s).")
+    repaired_moe_masks = repair_ernie_moe_meta_masks(model)
+    if repaired_moe_masks:
+        print(f"Repaired {repaired_moe_masks} ERNIE MoE expert mask module(s).")
 
     device = model_device(model)
     token_ids_by_answer = option_token_ids(processor)
