@@ -9,7 +9,7 @@ import torch
 from datasets import load_dataset
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoProcessor
+from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
 
 from run_visual_mcq_gemma4 import (
     ANSWER_KEYS,
@@ -80,8 +80,18 @@ def model_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
     return kwargs
 
 
+def load_config(args: argparse.Namespace) -> Any:
+    config = AutoConfig.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
+    if args.model.lower().endswith("-pt") and getattr(config, "multimodel_experts", False):
+        if not getattr(config, "moe_use_hard_gate", False):
+            config.moe_use_hard_gate = True
+            print("Patched ERNIE PT config: moe_use_hard_gate=True")
+    return config
+
+
 def load_model(args: argparse.Namespace) -> torch.nn.Module:
     kwargs = model_kwargs(args)
+    kwargs["config"] = load_config(args)
     try:
         return AutoModelForCausalLM.from_pretrained(args.model, **kwargs).eval()
     except TypeError as exc:
