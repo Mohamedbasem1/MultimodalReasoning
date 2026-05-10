@@ -56,7 +56,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--enable-thinking", action="store_true", help="Allow Qwen3 thinking mode if supported.")
     parser.add_argument("--max-pixels", type=int, default=1280 * 28 * 28)
     parser.add_argument("--min-pixels", type=int, default=256 * 28 * 28)
-    parser.add_argument("--device-map", default="auto")
+    parser.add_argument(
+        "--device-map",
+        default="auto",
+        help="Device map passed to from_pretrained. Use 'none' to omit device_map.",
+    )
     parser.add_argument("--torch-dtype", default="bfloat16", choices=["auto", "bfloat16", "float16", "float32"])
     parser.add_argument("--attn-implementation", default=None, choices=[None, "flash_attention_2", "sdpa", "eager"])
     parser.add_argument("--load-in-4bit", action="store_true")
@@ -259,8 +263,11 @@ def qwen3_from_pretrained(model_name: str, kwargs: Dict[str, Any]) -> Qwen3VLFor
 def load_model(args: argparse.Namespace) -> torch.nn.Module:
     kwargs: Dict[str, Any] = {
         "dtype": dtype_from_arg(args.torch_dtype),
-        "device_map": args.device_map,
     }
+    if args.device_map.lower() != "none":
+        kwargs["device_map"] = args.device_map
+    else:
+        kwargs["low_cpu_mem_usage"] = False
     if args.attn_implementation:
         kwargs["attn_implementation"] = args.attn_implementation
     if args.load_in_4bit:
@@ -276,6 +283,8 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
         from peft import PeftModel
 
         model = PeftModel.from_pretrained(model, args.adapter)
+    if args.device_map.lower() == "none" and torch.cuda.is_available():
+        model = model.to("cuda")
     return model.eval()
 
 
