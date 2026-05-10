@@ -1,7 +1,8 @@
 import argparse
 import json
+import re
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Sequence
 
 from datasets import load_dataset
 
@@ -43,6 +44,17 @@ def load_submission(path: Path) -> List[Dict[str, str]]:
     return data
 
 
+def normalize_answer_key(value: Any) -> str:
+    text = str(value).upper().strip()
+    if text in ANSWER_KEYS:
+        return text
+    match = re.fullmatch(
+        r"(?:ANSWER|OPTION|CHOICE|CORRECT)?\s*(?:IS|:|-)?\s*[\[\(\{\"']?\s*([A-E])\s*[\]\)\}\"'.:-]?\s*",
+        text,
+    )
+    return match.group(1) if match else ""
+
+
 def main() -> None:
     args = parse_args()
     submission_path = Path(args.submission)
@@ -55,7 +67,7 @@ def main() -> None:
         if set(row.keys()) != {"question_id", "answer_key"}:
             raise ValueError(f"Row {index} must contain exactly question_id and answer_key.")
         question_id = str(row["question_id"])
-        answer_key = str(row["answer_key"]).strip().upper()
+        answer_key = normalize_answer_key(row["answer_key"])
         if not question_id:
             raise ValueError(f"Row {index} has an empty question_id.")
         if question_id in seen_ids:
@@ -96,7 +108,7 @@ def main() -> None:
             question_id = str(row[id_column])
             if question_id not in pred_by_id:
                 continue
-            gold = str(row[args.answer_column]).strip().upper()
+            gold = normalize_answer_key(row[args.answer_column])
             if gold in ANSWER_KEYS:
                 scored += 1
                 correct += int(pred_by_id[question_id] == gold)
@@ -106,4 +118,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

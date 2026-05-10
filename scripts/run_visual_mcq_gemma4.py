@@ -369,7 +369,13 @@ def parse_answer(raw_text: str, fallback: str) -> str:
 
 def normalize_for_match(text: Any) -> str:
     value = str(text).upper().strip()
-    return value if value in ANSWER_KEYS else ""
+    if value in ANSWER_KEYS:
+        return value
+    match = re.fullmatch(
+        r"(?:ANSWER|OPTION|CHOICE|CORRECT)?\s*(?:IS|:|-)?\s*[\[\(\{\"']?\s*([A-E])\s*[\]\)\}\"'.:-]?\s*",
+        value,
+    )
+    return match.group(1) if match else ""
 
 
 def option_token_ids(processor: Any) -> Dict[str, List[int]]:
