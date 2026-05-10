@@ -55,6 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trust-remote-code", action="store_true")
     parser.add_argument("--image-variant", default="enhanced", choices=["original", "enhanced"])
     parser.add_argument("--enhance-longest-side", type=int, default=1000)
+    parser.add_argument("--resume", dest="resume", action="store_true", default=True)
+    parser.add_argument("--no-resume", dest="resume", action="store_false")
     return parser.parse_args()
 
 
@@ -75,6 +77,78 @@ def export_gold(rows: List[Dict[str, Any]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote gold file: {path}")
+
+
+def write_json_atomic(path: Path, rows: List[Dict[str, Any]]) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def read_json_rows(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError(f"{path} must contain a JSON list.")
+    return [row for row in data if isinstance(row, dict)]
+
+
+def read_jsonl_rows(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            print(f"Warning: ignoring malformed raw JSONL line {line_number} in {path}")
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def load_existing_predictions(output_path: Path, raw_output_path: Path) -> List[Dict[str, Any]]:
+    predictions: List[Dict[str, Any]] = []
+    seen_ids = set()
+    for row in read_json_rows(output_path):
+        question_id = str(row.get("question_id", "")).strip()
+        if not question_id or question_id in seen_ids:
+            continue
+        answers = row.get("answers")
+        if not isinstance(answers, list):
+            answer = str(row.get("answer", "")).strip() or "N/A"
+            answers = [answer]
+        predictions.append(
+            {
+                "question_id": question_id,
+                "answers": [str(answer) for answer in answers],
+                "language": str(row.get("language", "")),
+            }
+        )
+        seen_ids.add(question_id)
+
+    for row in read_jsonl_rows(raw_output_path):
+        question_id = str(row.get("question_id", "")).strip()
+        if not question_id or question_id in seen_ids:
+            continue
+        answers = row.get("answers")
+        if not isinstance(answers, list):
+            answer = str(row.get("answer", "")).strip() or "N/A"
+            answers = [answer]
+        predictions.append(
+            {
+                "question_id": question_id,
+                "answers": [str(answer) for answer in answers],
+                "language": str(row.get("language", "")),
+            }
+        )
+        seen_ids.add(question_id)
+    return predictions
 
 
 def clean_answer(raw_text: str, max_chars: int) -> str:
@@ -151,14 +225,31 @@ def main() -> None:
     device = model_device(model)
     input_float_dtype = model_float_dtype(model)
 
-    predictions: List[Dict[str, Any]] = []
+    if args.resume:
+        predictions = load_existing_predictions(output_path, raw_output_path)
+        completed_ids = {str(row["question_id"]) for row in predictions}
+        if predictions:
+            print(f"Resume enabled: found {len(predictions)} completed prediction(s).")
+            write_json_atomic(output_path, predictions)
+    else:
+        predictions = []
+        completed_ids = set()
+        if output_path.exists():
+            output_path.unlink()
+        if raw_output_path.exists():
+            raw_output_path.unlink()
+
     gold_rows: List[Dict[str, Any]] = []
     exact = 0
     scored = 0
 
-    with raw_output_path.open("w", encoding="utf-8") as raw_file:
+    raw_mode = "a" if args.resume else "w"
+    with raw_output_path.open(raw_mode, encoding="utf-8") as raw_file:
         for row in tqdm(dataset, desc="Generic-OpenQA"):
             question_id = str(row[id_column])
+            if question_id in completed_ids:
+                continue
+
             language = str(row.get("language", "")) if has_language else ""
             image = select_image_variant(normalize_image(row[image_column]), args.image_variant, args.enhance_longest_side)
             inputs = move_batch_to_device(
@@ -208,8 +299,10 @@ def main() -> None:
                     scored += 1
                     exact += int(normalize_for_match(answer) == normalize_for_match(gold))
             raw_file.write(json.dumps(raw_row, ensure_ascii=False) + "\n")
+            raw_file.flush()
+            write_json_atomic(output_path, predictions)
 
-    output_path.write_text(json.dumps(predictions, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(output_path, predictions)
     print(f"Wrote predictions: {output_path}")
     print(f"Wrote raw outputs: {raw_output_path}")
     if args.gold_output and gold_rows:
