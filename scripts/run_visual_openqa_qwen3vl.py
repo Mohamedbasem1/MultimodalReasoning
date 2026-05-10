@@ -42,6 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", default="test")
     parser.add_argument("--output", default="outputs/visual_openqa_qwen3vl8b_thinking.json")
     parser.add_argument("--raw-output", default=None, help="Defaults to '<output>.raw.jsonl'.")
+    parser.add_argument("--gold-output", default=None, help="Optional gold file matching the selected rows.")
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--prompt-file", default="prompts/visual_openqa_prompt.txt")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--filter-type", nargs="+", default=None)
@@ -144,6 +146,78 @@ def normalize_for_match(text: Any) -> str:
     value = re.sub(r"[^\w\s.%/-]", " ", value, flags=re.UNICODE)
     value = re.sub(r"\s+", " ", value).strip()
     return value
+
+
+def write_json_atomic(path: Path, rows: List[Dict[str, Any]]) -> None:
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def read_json_rows(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and isinstance(data.get("data"), list):
+        data = data["data"]
+    if not isinstance(data, list):
+        raise ValueError(f"Expected a JSON list in {path}")
+    return [row for row in data if isinstance(row, dict)]
+
+
+def read_jsonl_rows(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def load_existing_predictions(output_path: Path, raw_output_path: Path, answer_field: str) -> List[Dict[str, str]]:
+    rows = read_json_rows(output_path)
+    if not rows:
+        rows = read_jsonl_rows(raw_output_path)
+
+    seen: set[str] = set()
+    predictions: List[Dict[str, str]] = []
+    for row in rows:
+        question_id = row.get("question_id")
+        answer = row.get(answer_field)
+        if question_id is None or answer is None:
+            continue
+        question_id_text = str(question_id)
+        if question_id_text in seen:
+            continue
+        seen.add(question_id_text)
+        predictions.append({"question_id": question_id_text, answer_field: str(answer)})
+    return predictions
+
+
+def export_gold(
+    path: Path,
+    dataset: Any,
+    id_column: str,
+    answer_column: str,
+    answer_field: str,
+) -> None:
+    rows: List[Dict[str, Any]] = []
+    for row in dataset:
+        answer = str(row.get(answer_column, "")).strip()
+        if answer_field == "answers":
+            rows.append({"question_id": str(row[id_column]), "answers": [answer]})
+        else:
+            rows.append({"question_id": str(row[id_column]), "answers": [answer]})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomic(path, rows)
 
 
 def dtype_from_arg(dtype_name: str) -> Any:
@@ -335,6 +409,9 @@ def main() -> None:
     print(f"Image column: {image_column}")
     if answer_column:
         print(f"Gold column: {answer_column}")
+    if args.gold_output and answer_column:
+        export_gold(Path(args.gold_output), dataset, id_column, answer_column, args.answer_field)
+        print(f"Wrote gold file: {args.gold_output}")
 
     print(f"Loading model: {args.model}")
     processor = AutoProcessor.from_pretrained(
@@ -346,12 +423,21 @@ def main() -> None:
     device = model_device(model)
 
     predictions: List[Dict[str, str]] = []
+    completed_ids: set[str] = set()
+    if args.resume:
+        predictions = load_existing_predictions(output_path, raw_output_path, args.answer_field)
+        completed_ids = {row["question_id"] for row in predictions}
+        if completed_ids:
+            print(f"Resuming with {len(completed_ids)} completed prediction(s).")
     exact = 0
     scored = 0
 
-    with raw_output_path.open("w", encoding="utf-8") as raw_file:
+    raw_mode = "a" if args.resume and raw_output_path.exists() else "w"
+    with raw_output_path.open(raw_mode, encoding="utf-8") as raw_file:
         for row in tqdm(dataset, desc="Qwen3-OpenQA"):
             question_id = str(row[id_column])
+            if question_id in completed_ids:
+                continue
             image = normalize_image(row[image_column])
             image = select_image_variant(image, args.image_variant, args.enhance_longest_side)
             inputs = move_batch_to_device(build_inputs(processor, image, prompt, args.enable_thinking), device)
@@ -385,8 +471,11 @@ def main() -> None:
                     scored += 1
                     exact += int(normalize_for_match(answer) == normalize_for_match(gold))
             raw_file.write(json.dumps(raw_row, ensure_ascii=False) + "\n")
+            raw_file.flush()
+            completed_ids.add(question_id)
+            write_json_atomic(output_path, predictions)
 
-    output_path.write_text(json.dumps(predictions, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(output_path, predictions)
     print(f"Wrote predictions: {output_path}")
     print(f"Wrote raw outputs: {raw_output_path}")
     if scored:
