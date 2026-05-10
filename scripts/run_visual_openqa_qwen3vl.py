@@ -250,12 +250,10 @@ def qwen3_from_pretrained(model_name: str, kwargs: Dict[str, Any]) -> Qwen3VLFor
             raise
         if kwargs.get("device_map") != "auto" or not torch.cuda.is_available():
             raise
-        print("device_map=auto hit a meta tensor dispatch issue; retrying with direct CUDA load.")
+        print("device_map=auto hit a meta tensor dispatch issue; retrying with device_map='cuda'.")
         retry_kwargs = dict(kwargs)
-        retry_kwargs.pop("device_map", None)
-        retry_kwargs["low_cpu_mem_usage"] = False
-        model = load_with_dtype_retry(retry_kwargs)
-        return model.to("cuda")
+        retry_kwargs["device_map"] = "cuda"
+        return load_with_dtype_retry(retry_kwargs)
 
 
 def load_model(args: argparse.Namespace) -> torch.nn.Module:
