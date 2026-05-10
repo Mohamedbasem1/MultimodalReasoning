@@ -44,6 +44,16 @@ def load_json(path: Path) -> List[Dict[str, Any]]:
 
 
 def fetch_dataset_rows(dataset: str, config: str, split: str, page_size: int) -> List[Dict[str, Any]]:
+    try:
+        from datasets import load_dataset
+
+        dataset_kwargs: Dict[str, Any] = {"path": dataset, "split": split}
+        if config and config != "default":
+            dataset_kwargs["name"] = config
+        return [dict(row) for row in load_dataset(**dataset_kwargs)]
+    except Exception as exc:
+        print(f"Warning: load_dataset failed ({exc}); falling back to datasets-server rows API.")
+
     rows: List[Dict[str, Any]] = []
     offset = 0
     total = None
