@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import re
+import types
 import warnings
 from pathlib import Path
 from typing import Any, Dict, List
@@ -404,7 +405,39 @@ def load_comet_model(model_name: str = "Unbabel/wmt22-comet-da"):
         ) from exc
 
     checkpoint = download_model(model_name)
-    return load_from_checkpoint(checkpoint)
+    model = load_from_checkpoint(checkpoint)
+    patch_comet_xlmr_transformers_outputs(model)
+    return model
+
+
+def patch_comet_xlmr_transformers_outputs(model: Any) -> bool:
+    """Adapt newer Transformers XLM-R outputs to old COMET expectations."""
+
+    encoder = getattr(model, "encoder", None)
+    transformer = getattr(encoder, "model", None)
+    if transformer is None or getattr(transformer, "_imageclef_comet_tuple_patch", False):
+        return False
+
+    config = getattr(transformer, "config", None)
+    if config is not None:
+        config.return_dict = False
+        config.output_hidden_states = True
+
+    original_forward = transformer.forward
+
+    def forward_with_pooler_placeholder(self: Any, *args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("return_dict", False)
+        kwargs.setdefault("output_hidden_states", True)
+        outputs = original_forward(*args, **kwargs)
+        if hasattr(outputs, "to_tuple"):
+            outputs = outputs.to_tuple()
+        if isinstance(outputs, tuple) and len(outputs) == 2:
+            return outputs[0], None, outputs[1]
+        return outputs
+
+    transformer.forward = types.MethodType(forward_with_pooler_placeholder, transformer)
+    transformer._imageclef_comet_tuple_patch = True
+    return True
 
 
 def comet_scores_batch(
