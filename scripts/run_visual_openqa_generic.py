@@ -200,7 +200,7 @@ def main() -> None:
                 gold_rows.append(
                     {
                         "question_id": question_id,
-                        "answer": gold,
+                        "answers": [gold],
                         "language": language,
                     }
                 )
