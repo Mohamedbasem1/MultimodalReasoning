@@ -233,14 +233,29 @@ def dtype_from_arg(dtype_name: str) -> Any:
 
 
 def qwen3_from_pretrained(model_name: str, kwargs: Dict[str, Any]) -> Qwen3VLForConditionalGeneration:
+    def load_with_dtype_retry(load_kwargs: Dict[str, Any]) -> Qwen3VLForConditionalGeneration:
+        try:
+            return Qwen3VLForConditionalGeneration.from_pretrained(model_name, **load_kwargs)
+        except TypeError as exc:
+            if "dtype" not in str(exc) or "dtype" not in load_kwargs:
+                raise
+            retry_kwargs = dict(load_kwargs)
+            retry_kwargs["torch_dtype"] = retry_kwargs.pop("dtype")
+            return Qwen3VLForConditionalGeneration.from_pretrained(model_name, **retry_kwargs)
+
     try:
-        return Qwen3VLForConditionalGeneration.from_pretrained(model_name, **kwargs)
-    except TypeError as exc:
-        if "dtype" not in str(exc) or "dtype" not in kwargs:
+        return load_with_dtype_retry(kwargs)
+    except NotImplementedError as exc:
+        if "Cannot copy out of meta tensor" not in str(exc):
             raise
+        if kwargs.get("device_map") != "auto" or not torch.cuda.is_available():
+            raise
+        print("device_map=auto hit a meta tensor dispatch issue; retrying with direct CUDA load.")
         retry_kwargs = dict(kwargs)
-        retry_kwargs["torch_dtype"] = retry_kwargs.pop("dtype")
-        return Qwen3VLForConditionalGeneration.from_pretrained(model_name, **retry_kwargs)
+        retry_kwargs.pop("device_map", None)
+        retry_kwargs["low_cpu_mem_usage"] = False
+        model = load_with_dtype_retry(retry_kwargs)
+        return model.to("cuda")
 
 
 def load_model(args: argparse.Namespace) -> torch.nn.Module:
