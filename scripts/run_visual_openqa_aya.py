@@ -2,7 +2,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import torch
 from datasets import load_dataset
@@ -145,7 +145,7 @@ def dtype_from_arg(dtype_name: str) -> Any:
 
 def load_model(args: argparse.Namespace) -> torch.nn.Module:
     kwargs: Dict[str, Any] = {
-        "torch_dtype": dtype_from_arg(args.torch_dtype),
+        "dtype": dtype_from_arg(args.torch_dtype),
         "device_map": args.device_map,
     }
     if args.load_in_4bit:
@@ -166,9 +166,28 @@ def load_model(args: argparse.Namespace) -> torch.nn.Module:
 
 def model_device(model: torch.nn.Module) -> torch.device:
     model_device_attr = getattr(model, "device", None)
-    if isinstance(model_device_attr, torch.device):
+    if isinstance(model_device_attr, torch.device) and model_device_attr.type != "meta":
         return model_device_attr
-    return next(model.parameters()).device
+    for parameter in model.parameters():
+        if parameter.device.type == "cuda":
+            return parameter.device
+    for buffer in model.buffers():
+        if buffer.device.type == "cuda":
+            return buffer.device
+    for parameter in model.parameters():
+        if parameter.device.type != "meta":
+            return parameter.device
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def model_float_dtype(model: torch.nn.Module) -> Optional[torch.dtype]:
+    for parameter in model.parameters():
+        if parameter.device.type != "meta" and parameter.dtype.is_floating_point:
+            return parameter.dtype
+    for buffer in model.buffers():
+        if buffer.device.type != "meta" and buffer.dtype.is_floating_point:
+            return buffer.dtype
+    return None
 
 
 def build_inputs(
@@ -197,8 +216,21 @@ def build_inputs(
     )
 
 
-def move_batch_to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
-    return {key: value.to(device) if torch.is_tensor(value) else value for key, value in batch.items()}
+def move_batch_to_device(
+    batch: Dict[str, torch.Tensor],
+    device: torch.device,
+    float_dtype: Optional[torch.dtype] = None,
+) -> Dict[str, torch.Tensor]:
+    moved: Dict[str, torch.Tensor] = {}
+    for key, value in batch.items():
+        if not torch.is_tensor(value):
+            moved[key] = value
+            continue
+        if value.dtype.is_floating_point and float_dtype is not None:
+            moved[key] = value.to(device=device, dtype=float_dtype)
+        else:
+            moved[key] = value.to(device)
+    return moved
 
 
 def main() -> None:
@@ -236,9 +268,13 @@ def main() -> None:
         print(f"Gold column: {answer_column}")
 
     print(f"Loading model: {args.model}")
-    processor = AutoProcessor.from_pretrained(args.model)
+    processor_kwargs: Dict[str, Any] = {}
+    if "mistral" in args.model.lower():
+        processor_kwargs["fix_mistral_regex"] = True
+    processor = AutoProcessor.from_pretrained(args.model, **processor_kwargs)
     model = load_model(args)
     device = model_device(model)
+    input_float_dtype = model_float_dtype(model)
 
     predictions: List[Dict[str, str]] = []
     exact = 0
@@ -249,7 +285,7 @@ def main() -> None:
             question_id = str(row[id_column])
             image = normalize_image(row[image_column])
             image = select_image_variant(image, args.image_variant, args.enhance_longest_side)
-            inputs = move_batch_to_device(build_inputs(processor, image, prompt), device)
+            inputs = move_batch_to_device(build_inputs(processor, image, prompt), device, input_float_dtype)
 
             with torch.inference_mode():
                 generated_ids = model.generate(
