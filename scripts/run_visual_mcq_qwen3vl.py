@@ -59,6 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-column", default="auto")
     parser.add_argument("--answer-column", default="answer_key")
     parser.add_argument("--fallback-answer", choices=sorted(ANSWER_KEYS), default="A")
+    parser.add_argument("--selection-method", choices=["logits", "generate"], default="generate")
+    parser.add_argument("--answer-prefill", default="\nAnswer: ")
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--max-pixels", type=int, default=1280 * 28 * 28)
     parser.add_argument("--min-pixels", type=int, default=256 * 28 * 28)
@@ -82,6 +84,12 @@ def parse_args() -> argparse.Namespace:
         help="Image variant sent to Qwen3-VL.",
     )
     parser.add_argument("--enhance-longest-side", type=int, default=1600)
+    parser.add_argument(
+        "--ocr-json",
+        default=None,
+        help="Optional JSON/JSONL OCR records. Supports question_id/id/sample_id and ocr_text/text fields.",
+    )
+    parser.add_argument("--ocr-max-chars", type=int, default=2200)
     return parser.parse_args()
 
 
@@ -90,6 +98,57 @@ def load_prompt(path: str) -> str:
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()
     return DEFAULT_PROMPT
+
+
+def augment_prompt_with_ocr(prompt: str, ocr_text: str) -> str:
+    ocr_text = ocr_text.strip()
+    if not ocr_text:
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "External OCR text extracted from the same image is provided below. "
+        "Use it only as supporting evidence. If OCR conflicts with the image, trust the image.\n"
+        "<ocr_text>\n"
+        f"{ocr_text}\n"
+        "</ocr_text>"
+    )
+
+
+def load_ocr_json(path: Optional[str], max_chars: int) -> Dict[str, str]:
+    if not path:
+        return {}
+    ocr_path = Path(path)
+    if not ocr_path.exists():
+        raise FileNotFoundError(f"OCR JSON file not found: {path}")
+
+    if ocr_path.suffix.lower() == ".jsonl":
+        records: List[Dict[str, Any]] = []
+        with ocr_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    records.append(json.loads(line))
+    else:
+        data = json.loads(ocr_path.read_text(encoding="utf-8"))
+        if not isinstance(data, list):
+            raise ValueError("OCR JSON must be a list or JSONL records.")
+        records = data
+
+    lookup: Dict[str, str] = {}
+    for record in records:
+        ocr_text = str(
+            record.get("ocr_text")
+            or record.get("text")
+            or record.get("parsed_text")
+            or record.get("ParsedText")
+            or ""
+        ).strip()
+        if not ocr_text:
+            continue
+        for key in ("question_id", "id", "sample_id", "index"):
+            value = record.get(key)
+            if value is not None and str(value):
+                lookup[str(value)] = ocr_text[:max_chars]
+    return lookup
 
 
 def pick_column(columns: Sequence[str], requested: str, candidates: Iterable[str]) -> str:
@@ -235,8 +294,74 @@ def build_inputs(processor: AutoProcessor, image: Image.Image, prompt: str) -> D
     return dict(inputs)
 
 
+def apply_chat_template_text(processor: AutoProcessor, image: Image.Image, prompt: str) -> str:
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+    return processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+
+
+def build_score_inputs(
+    processor: AutoProcessor,
+    image: Image.Image,
+    prompt: str,
+    answer_prefill: str,
+) -> Dict[str, torch.Tensor]:
+    text = apply_chat_template_text(processor, image, prompt) + answer_prefill
+    try:
+        return dict(processor(text=[text], images=[image], return_tensors="pt"))
+    except TypeError:
+        return dict(processor(text=text, images=image, return_tensors="pt"))
+
+
 def move_batch_to_device(batch: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
     return {key: value.to(device) if torch.is_tensor(value) else value for key, value in batch.items()}
+
+
+def option_token_ids(processor: AutoProcessor) -> Dict[str, List[int]]:
+    tokenizer = getattr(processor, "tokenizer", processor)
+    result: Dict[str, List[int]] = {}
+    for key in sorted(ANSWER_KEYS):
+        ids = set()
+        for text in (key, f" {key}", f"{key}.", f"{key})", f"({key})"):
+            token_ids = tokenizer.encode(text, add_special_tokens=False)
+            if len(token_ids) == 1:
+                ids.add(int(token_ids[0]))
+        if not ids:
+            token_ids = tokenizer.encode(key, add_special_tokens=False)
+            if token_ids:
+                ids.add(int(token_ids[0]))
+        result[key] = sorted(ids)
+    return result
+
+
+def score_answer_logits(
+    model: torch.nn.Module,
+    inputs: Dict[str, Any],
+    token_ids_by_answer: Dict[str, List[int]],
+    fallback: str,
+) -> tuple[str, Dict[str, float]]:
+    outputs = model(**inputs, use_cache=False, return_dict=True)
+    logits = outputs.logits[0, -1].float()
+    log_probs = torch.log_softmax(logits, dim=-1)
+    scores: Dict[str, float] = {}
+    for answer, token_ids in token_ids_by_answer.items():
+        valid_ids = [token_id for token_id in token_ids if token_id < log_probs.numel()]
+        if valid_ids:
+            scores[answer] = float(log_probs[valid_ids].max().item())
+    if not scores:
+        return fallback, scores
+    return max(scores, key=scores.get), scores
 
 
 def main() -> None:
@@ -250,6 +375,9 @@ def main() -> None:
         print("Warning: CUDA is not available. Qwen3-VL-8B inference will be very slow on CPU.")
 
     prompt = load_prompt(args.prompt_file)
+    ocr_lookup = load_ocr_json(args.ocr_json, args.ocr_max_chars)
+    if ocr_lookup:
+        print(f"Loaded OCR text for {len(ocr_lookup)} ids from {args.ocr_json}")
     print(f"Loading dataset: {args.dataset} [{args.split}]")
     dataset = load_dataset(args.dataset, split=args.split)
 
@@ -277,48 +405,62 @@ def main() -> None:
     )
     model = load_model(args)
     device = model_device(model)
+    token_ids_by_answer = option_token_ids(processor)
+    if args.selection_method == "logits":
+        print(f"Using next-token MCQ scoring with option token IDs: {token_ids_by_answer}")
 
     predictions: List[Dict[str, str]] = []
     correct = 0
     scored = 0
 
     with raw_output_path.open("w", encoding="utf-8") as raw_file:
-        for row in tqdm(dataset, desc="Qwen3-VL"):
+        for index, row in enumerate(tqdm(dataset, desc="Qwen3-VL")):
             question_id = str(row[id_column])
             image = normalize_image(row[image_column])
             image = select_image_variant(image, args.image_variant, args.enhance_longest_side)
-            inputs = move_batch_to_device(build_inputs(processor, image, prompt), device)
+            ocr_text = ocr_lookup.get(question_id, ocr_lookup.get(str(index), ""))
+            row_prompt = augment_prompt_with_ocr(prompt, ocr_text)
 
             with torch.inference_mode():
-                generated_ids = model.generate(
-                    **inputs,
-                    do_sample=False,
-                    max_new_tokens=args.max_new_tokens,
-                )
+                if args.selection_method == "logits":
+                    inputs = move_batch_to_device(
+                        build_score_inputs(processor, image, row_prompt, args.answer_prefill),
+                        device,
+                    )
+                    answer_key, scores = score_answer_logits(
+                        model,
+                        inputs,
+                        token_ids_by_answer,
+                        args.fallback_answer,
+                    )
+                    raw_text = ""
+                else:
+                    inputs = move_batch_to_device(build_inputs(processor, image, row_prompt), device)
+                    generated_ids = model.generate(
+                        **inputs,
+                        do_sample=False,
+                        max_new_tokens=args.max_new_tokens,
+                    )
 
-            trimmed_ids = [
-                output_ids[len(input_ids) :]
-                for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)
-            ]
-            raw_text = processor.batch_decode(
-                trimmed_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )[0]
-            answer_key = parse_answer(raw_text, args.fallback_answer)
+                    trimmed_ids = [
+                        output_ids[len(input_ids) :]
+                        for input_ids, output_ids in zip(inputs["input_ids"], generated_ids)
+                    ]
+                    raw_text = processor.batch_decode(
+                        trimmed_ids,
+                        skip_special_tokens=True,
+                        clean_up_tokenization_spaces=False,
+                    )[0]
+                    answer_key = parse_answer(raw_text, args.fallback_answer)
+                    scores = {}
 
             predictions.append({"question_id": question_id, "answer_key": answer_key})
-            raw_file.write(
-                json.dumps(
-                    {
-                        "question_id": question_id,
-                        "answer_key": answer_key,
-                        "raw_text": raw_text,
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n"
-            )
+            raw_row = {"question_id": question_id, "answer_key": answer_key, "raw_text": raw_text}
+            if ocr_text:
+                raw_row["ocr_text"] = ocr_text
+            if scores:
+                raw_row["scores"] = scores
+            raw_file.write(json.dumps(raw_row, ensure_ascii=False) + "\n")
 
             if has_gold:
                 gold = str(row[args.answer_column]).strip().upper()
