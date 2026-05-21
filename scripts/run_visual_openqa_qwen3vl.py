@@ -2,7 +2,7 @@ import argparse
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import torch
 from datasets import load_dataset
@@ -66,6 +66,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--load-in-4bit", action="store_true")
     parser.add_argument("--image-variant", default="enhanced", choices=["original", "enhanced"])
     parser.add_argument("--enhance-longest-side", type=int, default=1600)
+    parser.add_argument(
+        "--ocr-json",
+        default=None,
+        help="Optional JSON/JSONL OCR records. Supports question_id/id/sample_id and ocr_text/text fields.",
+    )
+    parser.add_argument("--ocr-max-chars", type=int, default=2600)
     return parser.parse_args()
 
 
@@ -74,6 +80,61 @@ def load_prompt(path: str) -> str:
     if prompt_path.exists():
         return prompt_path.read_text(encoding="utf-8").strip()
     return DEFAULT_PROMPT
+
+
+def augment_prompt_with_ocr(prompt: str, ocr_text: str) -> str:
+    ocr_text = ocr_text.strip()
+    if not ocr_text:
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "External OCR text extracted from the same image is provided below. "
+        "Use it only as supporting evidence to recover small or blurry text, labels, formulas, numbers, and units. "
+        "If OCR conflicts with the image, trust the image.\n"
+        "<ocr_text>\n"
+        f"{ocr_text}\n"
+        "</ocr_text>"
+    )
+
+
+def load_ocr_json(path: Optional[str], max_chars: int) -> Dict[str, str]:
+    if not path:
+        return {}
+    ocr_path = Path(path)
+    if not ocr_path.exists():
+        raise FileNotFoundError(f"OCR JSON file not found: {path}")
+
+    records: List[Dict[str, Any]] = []
+    if ocr_path.suffix.lower() == ".jsonl":
+        with ocr_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    records.append(json.loads(line))
+    else:
+        data = json.loads(ocr_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("data"), list):
+            data = data["data"]
+        if not isinstance(data, list):
+            raise ValueError("OCR JSON must be a list, {'data': [...]}, or JSONL records.")
+        records = [record for record in data if isinstance(record, dict)]
+
+    lookup: Dict[str, str] = {}
+    for record in records:
+        ocr_text = str(
+            record.get("ocr_text")
+            or record.get("text")
+            or record.get("parsed_text")
+            or record.get("ParsedText")
+            or ""
+        ).strip()
+        if not ocr_text:
+            continue
+        for key in ("question_id", "id", "sample_id", "index"):
+            value = record.get(key)
+            if value is not None and str(value):
+                lookup[str(value)] = ocr_text[:max_chars]
+    print(f"Loaded OCR text for {len(lookup)} ids from {path}")
+    return lookup
 
 
 def pick_column(columns: Sequence[str], requested: str, candidates: Iterable[str], required: bool = True) -> str:
@@ -409,6 +470,7 @@ def main() -> None:
         print("Warning: CUDA is not available. Qwen3-VL-8B inference will be very slow on CPU.")
 
     prompt = load_prompt(args.prompt_file)
+    ocr_lookup = load_ocr_json(args.ocr_json, args.ocr_max_chars)
     print(f"Loading dataset: {args.dataset} [{args.split}]")
     dataset = load_dataset(args.dataset, split=args.split)
     if args.filter_type:
@@ -456,13 +518,15 @@ def main() -> None:
 
     raw_mode = "a" if args.resume and raw_output_path.exists() else "w"
     with raw_output_path.open(raw_mode, encoding="utf-8") as raw_file:
-        for row in tqdm(dataset, desc="Qwen3-OpenQA"):
+        for index, row in enumerate(tqdm(dataset, desc="Qwen3-OpenQA")):
             question_id = str(row[id_column])
             if question_id in completed_ids:
                 continue
             image = normalize_image(row[image_column])
             image = select_image_variant(image, args.image_variant, args.enhance_longest_side)
-            inputs = move_batch_to_device(build_inputs(processor, image, prompt, args.enable_thinking), device)
+            ocr_text = ocr_lookup.get(question_id, ocr_lookup.get(str(index), ""))
+            row_prompt = augment_prompt_with_ocr(prompt, ocr_text)
+            inputs = move_batch_to_device(build_inputs(processor, image, row_prompt, args.enable_thinking), device)
 
             with torch.inference_mode():
                 generated_ids = model.generate(
@@ -486,6 +550,8 @@ def main() -> None:
 
             predictions.append({"question_id": question_id, args.answer_field: answer})
             raw_row = {"question_id": question_id, args.answer_field: answer, "raw_text": raw_text}
+            if ocr_text:
+                raw_row["ocr_text"] = ocr_text
             if answer_column:
                 gold = str(row[answer_column]).strip()
                 raw_row["gold"] = gold
