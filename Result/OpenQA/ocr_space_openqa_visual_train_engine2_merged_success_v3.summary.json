@@ -1,0 +1,19 @@
+{
+  "dataset": "SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual",
+  "split": "train",
+  "expected_rows": 528,
+  "all_rows_seen_in_merge": 997,
+  "unique_ids_seen": 528,
+  "errored_rows_seen_in_merge": 402,
+  "empty_text_rows_seen_in_merge": 405,
+  "successful_unique_rows": 528,
+  "missing_or_failed_count": 0,
+  "merged_output": "Result\\OpenQA\\ocr_space_openqa_visual_train_engine2_merged_success_v3.jsonl",
+  "sources": [
+    "Result/OpenQA/ocr_space_openqa_visual_train_engine2_merged_success.jsonl",
+    "Result/OpenQA/ocr_space_openqa_visual_train_engine2_retry_missing_auto.jsonl",
+    "Result/OpenQA/ocr_space_openqa_visual_train_engine2_retry_missing_auto_round2.jsonl",
+    "Result/OpenQA/ocr_space_openqa_visual_train_engine2_retry_missing_auto_round3.jsonl",
+    "Result/OpenQA/ocr_space_openqa_visual_train_engine3_retry_index315.jsonl"
+  ]
+}
