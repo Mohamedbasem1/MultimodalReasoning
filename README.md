@@ -35,13 +35,13 @@ In a Lightning AI Studio terminal:
 ```bash
 git clone <your-repo-url> imageclef-mr2026
 cd imageclef-mr2026
-bash scripts/setup_lightning.sh
+pip install -r requirements.txt
 ```
 
 If you uploaded this folder manually instead of cloning, just `cd` into the folder and run:
 
 ```bash
-bash scripts/setup_lightning.sh
+pip install -r requirements.txt
 ```
 
 Confirm the Studio sees the GPU:
@@ -284,24 +284,6 @@ python scripts/validate_openqa_submission.py \
   --official-format
 ```
 
-## Visual OpenQA With Aya Vision 8B
-
-`CohereLabs/aya-vision-8b` is another OpenQA experiment. The model is gated on Hugging Face, so log in with an account that has access before running.
-
-Run the full unattended pipeline:
-
-```bash
-hf auth login
-nohup bash scripts/run_openqa_aya_full_pipeline.sh > aya_openqa.nohup.log 2>&1 &
-tail -f aya_openqa.nohup.log
-```
-
-The pipeline installs `requirements-aya-vision.txt`, trains a 600-step QLoRA adapter, predicts the blinded test split, converts to the official answer-list format, and validates the file. The final submission path is:
-
-```bash
-outputs/visual_openqa_aya_vision_8b_lora_600_lr5e5_test_official.json
-```
-
 ## Visual OpenQA With Qwen3.6-35B-A3B And Unsloth
 
 `unsloth/Qwen3.6-35B-A3B` is a vision-capable MoE model with 35B total parameters and about 3B activated. This path is experimental and should be run only on a large GPU machine. Start detached, because downloading and training can take a long time.
@@ -436,7 +418,7 @@ python scripts/run_visual_mcq_qwen3vl.py \
 Use a separate Lightning Studio if possible because Aya Vision requires a specific Transformers branch:
 
 ```bash
-pip install -r requirements-aya-vision.txt
+pip install -r requirements.txt
 hf auth login
 hf download CohereLabs/aya-vision-8b config.json --repo-type model --local-dir /tmp/aya-test
 ```
@@ -504,7 +486,7 @@ python scripts/run_visual_mcq_aya.py \
 Install:
 
 ```bash
-pip install -r requirements-minicpm-v.txt
+pip install -r requirements.txt
 ```
 
 Run a 500-example EXAMS-V test:
@@ -584,7 +566,7 @@ python scripts/run_visual_mcq_minicpm.py \
 Install in a fresh Lightning Studio if possible because the model card requires newer Torch/Transformers:
 
 ```bash
-pip install -r requirements-phi4vision.txt
+pip install -r requirements.txt
 ```
 
 Run a 500-example EXAMS-V test:
@@ -757,21 +739,11 @@ The strongest confirmed baseline so far is Qwen2.5-VL-7B with the EXAMS-V LoRA a
 - OCR/detail-focused solving
 - option verification/elimination
 
-The voting script can also run an enhanced image variant and inject external OCR text into the prompt. The safest optional OCR dependency on Lightning is EasyOCR:
+The voting script can also run an enhanced image variant and inject external OCR text into the prompt. For the current OCR.space workflow, install the base requirements:
 
 ```bash
-pip install -r requirements-ocr.txt
+pip install -r requirements.txt
 ```
-
-PaddleOCR is stronger in many document-style OCR settings and supports very broad multilingual recognition, but it has a heavier install stack. Use it only if the Lightning image supports it cleanly.
-
-DeepSeek-OCR is also supported as a stronger VLM-style OCR extractor. It is a 3B MIT-licensed Hugging Face model, so it is heavier than EasyOCR but can produce richer document Markdown:
-
-```bash
-pip install -r requirements-deepseek-ocr.txt
-```
-
-If your environment has FlashAttention installed, you can use `--deepseek-ocr-attn-implementation flash_attention_2`; otherwise keep the default `sdpa`.
 
 Try it first on a labeled EXAMS-V subset:
 
@@ -1119,62 +1091,6 @@ python scripts/run_visual_mcq_internvl3.py \
   --split test \
   --image-variant enhanced \
   --output outputs/imageclef_visual_mcq_internvl3_8b_enhanced.json
-```
-
-### Two-Account DeepSeek-OCR Workflow
-
-Use this when DeepSeek-OCR needs a different Transformers version than Qwen2.5-VL.
-
-In the **DeepSeek-OCR-only Lightning account**:
-
-```bash
-git clone -b main https://github.com/Mohamedbasem1/MultimodalReasoning.git imageclef-mr2026
-cd imageclef-mr2026
-pip install -r requirements-deepseek-ocr.txt
-
-python scripts/extract_deepseek_ocr.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 100 \
-  --image-variant enhanced \
-  --output outputs/examsv_test_deepseek_ocr_100.jsonl
-```
-
-Download or copy `outputs/examsv_test_deepseek_ocr_100.jsonl` into the **Qwen Lightning account**, then run:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --limit 100 \
-  --num-prompts 1 \
-  --image-variants original \
-  --ocr-json outputs/examsv_test_deepseek_ocr_100.jsonl \
-  --output outputs/examsv_test_qwen25vl7b_deepseek_ocr_100.json
-```
-
-For the competition test set, extract OCR in the OCR account:
-
-```bash
-python scripts/extract_deepseek_ocr.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --image-variant enhanced \
-  --output outputs/imageclef_visual_mcq_deepseek_ocr.jsonl
-```
-
-Then use that OCR JSONL in the Qwen account:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --num-prompts 1 \
-  --image-variants original \
-  --ocr-json outputs/imageclef_visual_mcq_deepseek_ocr.jsonl \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_deepseek_ocr.json
 ```
 
 ## Zero-Shot Prediction

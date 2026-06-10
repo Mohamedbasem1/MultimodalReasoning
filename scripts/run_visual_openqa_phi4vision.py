@@ -311,6 +311,7 @@ def main() -> None:
                     do_sample=False,
                     max_new_tokens=args.max_new_tokens,
                     eos_token_id=processor.tokenizer.eos_token_id,
+                    use_cache=False,
                 )
 
             raw_text = processor.tokenizer.decode(
