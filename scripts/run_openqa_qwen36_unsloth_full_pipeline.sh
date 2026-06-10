@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DATASET="SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual"
+ADAPTER_DIR="outputs/qwen36-35b-a3b-openqa-unsloth-lora-300-lr3e5"
+LEGACY_OUTPUT="outputs/visual_openqa_qwen36_35b_a3b_unsloth_lora_300_lr3e5_test_legacy.json"
+OFFICIAL_OUTPUT="outputs/visual_openqa_qwen36_35b_a3b_unsloth_lora_300_lr3e5_test_official.json"
+LOG_DIR="outputs/logs"
+LOG_FILE="${LOG_DIR}/qwen36_unsloth_openqa_full_$(date +%Y%m%d_%H%M%S).log"
+
+mkdir -p "${LOG_DIR}" outputs
+
+exec > >(tee -a "${LOG_FILE}") 2>&1
+export UNSLOTH_MOE_BACKEND="${UNSLOTH_MOE_BACKEND:-native_torch}"
+
+echo "Starting Qwen3.6-35B-A3B Unsloth OpenQA pipeline"
+echo "Log: ${LOG_FILE}"
+date
+
+echo
+echo "Installing Unsloth/Qwen3.6 dependencies"
+pip install -U -r requirements-unsloth-qwen36.txt
+pip install --force-reinstall --no-deps "transformers==5.5.0" "trl==0.24.0" "unsloth==2026.5.2" unsloth_zoo
+
+echo
+echo "Dependency versions"
+python - <<'PY'
+import builtins
+import os
+import huggingface_hub
+
+if not hasattr(huggingface_hub, "is_offline_mode"):
+    def is_offline_mode() -> bool:
+        value = os.environ.get("HF_HUB_OFFLINE") or os.environ.get("TRANSFORMERS_OFFLINE") or ""
+        return value.upper() in {"1", "ON", "YES", "TRUE"}
+
+    huggingface_hub.is_offline_mode = is_offline_mode
+
+import transformers
+import trl
+from transformers import AutoConfig
+
+try:
+    from transformers.utils import auto_docstring
+except Exception:
+    def auto_docstring(obj=None, *args, **kwargs):
+        if callable(obj):
+            return obj
+        def decorator(inner):
+            return inner
+        return decorator
+builtins.auto_docstring = auto_docstring
+try:
+    from huggingface_hub.dataclasses import strict
+except Exception:
+    def strict(obj=None, *args, **kwargs):
+        if callable(obj):
+            return obj
+        def decorator(inner):
+            return inner
+        return decorator
+builtins.strict = strict
+try:
+    from transformers.utils.type_validators import interval
+except Exception:
+    def interval(*args, default=None, **kwargs):
+        return default
+builtins.interval = interval
+try:
+    from transformers import PreTrainedConfig
+except Exception:
+    from transformers import PretrainedConfig as PreTrainedConfig
+builtins.PreTrainedConfig = PreTrainedConfig
+builtins.PretrainedConfig = PreTrainedConfig
+try:
+    from transformers.modeling_rope_utils import RopeParameters
+    builtins.RopeParameters = RopeParameters
+except Exception:
+    pass
+import unsloth
+
+print("transformers", transformers.__version__)
+print("unsloth", getattr(unsloth, "__version__", "unknown"))
+print("trl", trl.__version__)
+print("UNSLOTH_MOE_BACKEND", os.environ.get("UNSLOTH_MOE_BACKEND"))
+print("unsloth import ok")
+cfg = AutoConfig.from_pretrained("unsloth/Qwen3.6-35B-A3B")
+print("model_type", cfg.model_type)
+PY
+
+echo
+echo "Training Qwen3.6-35B-A3B OpenQA LoRA with Unsloth"
+python scripts/train_visual_openqa_lora_qwen36_unsloth.py \
+  --dataset "${DATASET}" \
+  --train-split train \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --max-steps 300 \
+  --learning-rate 3e-5 \
+  --save-steps 25 \
+  --image-variant enhanced \
+  --enhance-longest-side 1000 \
+  --output-dir "${ADAPTER_DIR}"
+
+echo
+echo "Running blinded test prediction"
+python scripts/run_visual_openqa_qwen36_unsloth.py \
+  --dataset "${DATASET}" \
+  --split test \
+  --adapter "${ADAPTER_DIR}" \
+  --load-in-4bit \
+  --image-variant enhanced \
+  --enhance-longest-side 1000 \
+  --output "${LEGACY_OUTPUT}"
+
+echo
+echo "Converting to official OpenQA submission format"
+python scripts/convert_openqa_submission.py \
+  "${LEGACY_OUTPUT}" \
+  --dataset "${DATASET}" \
+  --split test \
+  --split-answers \
+  --output "${OFFICIAL_OUTPUT}"
+
+echo
+echo "Validating official submission"
+python scripts/validate_openqa_submission.py \
+  "${OFFICIAL_OUTPUT}" \
+  --dataset "${DATASET}" \
+  --split test \
+  --official-format
+
+echo
+echo "Done"
+echo "Official submission: ${OFFICIAL_OUTPUT}"
+echo "Log: ${LOG_FILE}"
+date

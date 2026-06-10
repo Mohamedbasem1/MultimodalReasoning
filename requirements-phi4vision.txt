@@ -1,9 +1,0 @@
-accelerate>=1.1.0
-bitsandbytes>=0.43.0
-datasets>=2.21.0
-peft>=0.12.0
-pillow>=10.0.0
-safetensors>=0.4.0
-torch>=2.7.1
-tqdm>=4.66.0
-transformers>=4.57.1

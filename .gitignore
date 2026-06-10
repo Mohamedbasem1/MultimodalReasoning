@@ -6,6 +6,10 @@ data/
 outputs/
 logs/
 *.zip
+paper/
+Result/
+.tmp*/
+*.log
 
 .env
 .cache/

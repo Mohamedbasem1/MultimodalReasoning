@@ -1,9 +1,0 @@
-# Optional OCR dependencies for scripts/run_visual_mcq_voting.py.
-# Install only when you want external OCR text injected into the VLM prompt.
-
-# Easier Lightning default: multilingual, PyTorch-based, supports 80+ languages.
-easyocr>=1.7.2
-
-# Stronger OCR option, but heavier dependency stack. Install manually if needed:
-# pip install paddleocr paddlepaddle-gpu
-

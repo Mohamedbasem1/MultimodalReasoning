@@ -1,0 +1,22 @@
+{
+  "all_rows_seen_in_merge": 1719,
+  "errored_rows_seen_in_merge": 147,
+  "successful_unique_rows": 1117,
+  "missing_or_failed_count": 0,
+  "missing_or_failed_indexes": [],
+  "merged_output": "Result\\ocr_space_mcq_visual_test_engine2_merged_success.jsonl",
+  "retry_sources": [
+    "Result\\ocr_space_mcq_visual_test_engine2.before_dedupe.jsonl",
+    "Result\\ocr_space_mcq_visual_test_engine2.jsonl",
+    "Result\\ocr_space_mcq_jobs\\part1_162_499.jsonl",
+    "Result\\ocr_space_mcq_jobs\\part2_500_899.jsonl",
+    "Result\\ocr_space_mcq_jobs\\part3_900_1116.jsonl",
+    "Result\\ocr_space_mcq_retry_missing\\retry_missing_part1.jsonl",
+    "Result\\ocr_space_mcq_retry_missing\\retry_missing_part2.jsonl",
+    "Result\\ocr_space_mcq_retry_missing\\retry_missing_part3.jsonl",
+    "Result\\ocr_space_mcq_retry_missing_333\\retry_missing_333_part1.jsonl",
+    "Result\\ocr_space_mcq_retry_missing_333\\retry_missing_333_part2.jsonl",
+    "Result\\ocr_space_mcq_retry_missing_333\\retry_missing_333_part3.jsonl",
+    "Result\\ocr_space_mcq_retry_remaining_after333\\retry_remaining_118.jsonl"
+  ]
+}

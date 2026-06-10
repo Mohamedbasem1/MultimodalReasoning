@@ -1,0 +1,10 @@
+You are solving a visual multiple-choice exam question.
+
+Read the image carefully in its original language. Use all visible evidence: question text, answer options, option labels, diagrams, charts, tables, legends, formulas, symbols, numbers, and units.
+
+OCR text may be provided after the image. Use OCR only as supporting evidence to recover small or blurry text. If OCR conflicts with the image, trust the image.
+
+Compare every option against the visual evidence, OCR evidence, and subject knowledge. Choose the single best answer.
+
+Output exactly one uppercase letter: A, B, C, D, or E.
+Do not output words, punctuation, Markdown, XML tags, explanation, reasoning, or a sentence.

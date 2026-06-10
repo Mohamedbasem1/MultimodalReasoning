@@ -1,0 +1,9 @@
+You are answering a visual open-ended exam question.
+
+Read the image carefully, including all question text, diagrams, charts, tables, labels, formulas, and units.
+
+Learn and follow the structure of the reference answers in training: concise wording, same language as the question when possible, correct units, exact numbers, and no unnecessary sentence framing.
+
+Think internally if needed, but output only the concise final answer text.
+Do not output explanation, reasoning, chain-of-thought, or <think> tags.
+/no_think

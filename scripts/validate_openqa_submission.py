@@ -1,28 +1,23 @@
 import argparse
 import json
-import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
-from datasets import load_dataset
-
-
-ANSWER_KEYS = {"A", "B", "C", "D", "E"}
-
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate an ImageCLEF Visual MCQ JSON submission.")
+    parser = argparse.ArgumentParser(description="Validate an ImageCLEF Visual OpenQA JSON submission.")
     parser.add_argument("submission")
     parser.add_argument("--dataset", default=None)
     parser.add_argument("--split", default="test")
     parser.add_argument("--filter-type", nargs="+", default=None)
     parser.add_argument("--id-column", default="auto")
-    parser.add_argument("--answer-column", default="answer_key")
+    parser.add_argument("--answer-field", default="answer")
     parser.add_argument(
-        "--allow-subset",
+        "--official-format",
         action="store_true",
-        help="Allow predictions for only part of the dataset. Useful for smoke tests.",
+        help="Require question_id, answers list, and language fields.",
     )
+    parser.add_argument("--allow-subset", action="store_true")
     return parser.parse_args()
 
 
@@ -37,49 +32,68 @@ def pick_column(columns: Sequence[str], requested: str, candidates: Iterable[str
     raise ValueError(f"Could not infer id column. Available: {list(columns)}")
 
 
-def load_submission(path: Path) -> List[Dict[str, str]]:
+def load_submission(path: Path) -> List[Dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
         raise ValueError("Submission must be a JSON list.")
     return data
 
 
-def normalize_answer_key(value: Any) -> str:
-    text = str(value).upper().strip()
-    if text in ANSWER_KEYS:
-        return text
-    match = re.fullmatch(
-        r"(?:ANSWER|OPTION|CHOICE|CORRECT)?\s*(?:IS|:|-)?\s*[\[\(\{\"']?\s*([A-E])\s*[\]\)\}\"'.:-]?\s*",
-        text,
-    )
-    return match.group(1) if match else ""
+def validate_official_row(row: Dict[str, Any], index: int) -> str:
+    required_keys = {"question_id", "answers", "language"}
+    if set(row.keys()) != required_keys:
+        raise ValueError(f"Row {index} must contain exactly question_id, answers, and language.")
+    question_id = str(row["question_id"])
+    answers = row["answers"]
+    language = str(row["language"]).strip()
+    if not question_id:
+        raise ValueError(f"Row {index} has an empty question_id.")
+    if not isinstance(answers, list):
+        raise ValueError(f"Row {index} answers must be a list.")
+    if not answers:
+        raise ValueError(f"Row {index} answers must contain at least one item.")
+    for answer_index, answer in enumerate(answers):
+        if not isinstance(answer, str):
+            raise ValueError(f"Row {index} answers[{answer_index}] must be a string.")
+    if not language:
+        raise ValueError(f"Row {index} has an empty language.")
+    return question_id
+
+
+def validate_legacy_row(row: Dict[str, Any], index: int, answer_field: str) -> str:
+    required_keys = {"question_id", answer_field}
+    if set(row.keys()) != required_keys:
+        raise ValueError(f"Row {index} must contain exactly question_id and {answer_field}.")
+    question_id = str(row["question_id"])
+    answer = str(row[answer_field]).strip()
+    if not question_id:
+        raise ValueError(f"Row {index} has an empty question_id.")
+    if not answer:
+        raise ValueError(f"Empty answer for {question_id}.")
+    return question_id
 
 
 def main() -> None:
     args = parse_args()
-    submission_path = Path(args.submission)
-    rows = load_submission(submission_path)
+    rows = load_submission(Path(args.submission))
 
     seen_ids = set()
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
             raise ValueError(f"Row {index} must be an object.")
-        if set(row.keys()) != {"question_id", "answer_key"}:
-            raise ValueError(f"Row {index} must contain exactly question_id and answer_key.")
-        question_id = str(row["question_id"])
-        answer_key = normalize_answer_key(row["answer_key"])
-        if not question_id:
-            raise ValueError(f"Row {index} has an empty question_id.")
+        if args.official_format:
+            question_id = validate_official_row(row, index)
+        else:
+            question_id = validate_legacy_row(row, index, args.answer_field)
         if question_id in seen_ids:
             raise ValueError(f"Duplicate question_id: {question_id}")
-        if answer_key not in ANSWER_KEYS:
-            raise ValueError(f"Invalid answer_key for {question_id}: {row['answer_key']!r}")
         seen_ids.add(question_id)
 
     print(f"Basic JSON validation passed: {len(rows)} predictions")
-
     if not args.dataset:
         return
+
+    from datasets import load_dataset
 
     dataset = load_dataset(args.dataset, split=args.split)
     if args.filter_type:
@@ -99,21 +113,6 @@ def main() -> None:
         raise ValueError(f"Submission size {len(rows)} does not match dataset size {len(dataset)}.")
 
     print(f"Dataset validation passed against {args.dataset} [{args.split}]")
-
-    if args.answer_column in dataset.column_names:
-        pred_by_id = {str(row["question_id"]): str(row["answer_key"]).strip().upper() for row in rows}
-        correct = 0
-        scored = 0
-        for row in dataset:
-            question_id = str(row[id_column])
-            if question_id not in pred_by_id:
-                continue
-            gold = normalize_answer_key(row[args.answer_column])
-            if gold in ANSWER_KEYS:
-                scored += 1
-                correct += int(pred_by_id[question_id] == gold)
-        if scored:
-            print(f"Accuracy: {correct / scored:.4f} ({correct}/{scored})")
 
 
 if __name__ == "__main__":

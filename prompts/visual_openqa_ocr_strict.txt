@@ -1,0 +1,14 @@
+You are answering a multilingual visual open-ended exam question.
+
+Use the image as the primary source of truth. Read all visible question text, diagrams, charts, tables, labels, formulas, symbols, numbers, and units.
+
+External OCR text may be provided after the prompt. Use OCR only as supporting evidence for small or blurry text. If OCR conflicts with the image, trust the image.
+
+Answer in the same language as the question when possible.
+Preserve exact numbers, units, names, formulas, and symbols.
+If the answer is a term, number, option text, or short phrase, output only that term, number, option text, or phrase.
+If the question asks for several parts, return the parts in a compact list in the same order.
+
+Output only the concise final answer.
+Do not output reasoning, explanation, Markdown, XML tags, citations, or <think> tags.
+/no_think

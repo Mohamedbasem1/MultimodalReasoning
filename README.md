@@ -35,13 +35,13 @@ In a Lightning AI Studio terminal:
 ```bash
 git clone <your-repo-url> imageclef-mr2026
 cd imageclef-mr2026
-bash scripts/setup_lightning.sh
+pip install -r requirements.txt
 ```
 
 If you uploaded this folder manually instead of cloning, just `cd` into the folder and run:
 
 ```bash
-bash scripts/setup_lightning.sh
+pip install -r requirements.txt
 ```
 
 Confirm the Studio sees the GPU:
@@ -113,6 +113,194 @@ python scripts/validate_mcq_submission.py \
 ```
 
 Submit `outputs/visual_mcq_qwen25vl7b_lora.json`.
+
+## Visual OpenQA With Qwen3-VL
+
+Visual OpenQA is a generative task: the model must produce a free-form answer instead of an `A/B/C/D/E` choice. The submission JSON uses:
+
+```json
+[
+  {"question_id": "example_id", "answers": ["short answer text"], "language": "Bulgarian"}
+]
+```
+
+Install the Qwen3-VL dependencies:
+
+```bash
+pip install -r requirements-qwen3vl.txt
+```
+
+Run a tiny prediction smoke test on the competition Visual OpenQA test split:
+
+```bash
+python scripts/run_visual_openqa_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --limit 5 \
+  --image-variant enhanced \
+  --output outputs/visual_openqa_qwen3vl_smoke.json
+
+python scripts/validate_openqa_submission.py \
+  outputs/visual_openqa_qwen3vl_smoke.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --allow-subset
+```
+
+Start with a small OpenQA QLoRA smoke run:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --validation-from-train 100 \
+  --internal-test-split dev \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --train-limit 200 \
+  --eval-limit 100 \
+  --internal-test-limit 50 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen3vl8b-thinking-openqa-lora-smoke
+```
+
+The OpenQA prompt explicitly asks the model to learn the reference-answer structure: concise wording, same language when possible, correct units, exact numbers, and no extra sentence framing.
+
+Run a longer OpenQA LoRA:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --validation-from-train 100 \
+  --internal-test-split dev \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --max-steps 600 \
+  --learning-rate 3e-5 \
+  --eval-limit 100 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5
+```
+
+With `--validation-from-train 100`, the trainer shuffles the filtered train split using `--seed`, holds out 100 labeled train rows for validation, and trains on the rest. `--internal-test-split dev` scores the dev split after training, while the blinded `test` split is used only for the final prediction file.
+
+Predict the competition Visual OpenQA test split:
+
+```bash
+python scripts/run_visual_openqa_qwen3vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --adapter outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5 \
+  --image-variant enhanced \
+  --output outputs/visual_openqa_qwen3vl_lora_legacy.json
+
+python scripts/convert_openqa_submission.py \
+  outputs/visual_openqa_qwen3vl_lora_legacy.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --split-answers \
+  --output outputs/visual_openqa_qwen3vl_lora.json
+
+python scripts/validate_openqa_submission.py \
+  outputs/visual_openqa_qwen3vl_lora.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --official-format
+```
+
+## Visual OpenQA With Qwen2.5-VL
+
+This is a lighter OpenQA experiment using `Qwen/Qwen2.5-VL-7B-Instruct`. It uses the same answer-structure prompt as the Qwen3 OpenQA run, but without Qwen3 thinking-mode handling.
+
+Install the Qwen2.5-VL dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run a small QLoRA smoke test first:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen25vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --validation-from-train 100 \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --train-limit 200 \
+  --eval-limit 100 \
+  --max-steps 20 \
+  --eval-steps 10 \
+  --save-steps 10 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen25vl7b-instruct-openqa-lora-smoke
+```
+
+Run the longer OpenQA LoRA:
+
+```bash
+python scripts/train_visual_openqa_lora_qwen25vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --train-split train \
+  --validation-from-train 100 \
+  --load-in-4bit \
+  --gradient-checkpointing \
+  --max-steps 600 \
+  --learning-rate 3e-5 \
+  --eval-limit 100 \
+  --eval-steps 100 \
+  --save-steps 100 \
+  --image-variant enhanced \
+  --output-dir outputs/qwen25vl7b-instruct-openqa-lora-600-lr3e5
+```
+
+Predict and convert the blinded Visual OpenQA test split:
+
+```bash
+python scripts/run_visual_openqa_qwen25vl.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --adapter outputs/qwen25vl7b-instruct-openqa-lora-600-lr3e5 \
+  --image-variant enhanced \
+  --output outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_legacy.json
+
+python scripts/convert_openqa_submission.py \
+  outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_legacy.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --split-answers \
+  --output outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_official.json
+
+python scripts/validate_openqa_submission.py \
+  outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_official.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split test \
+  --official-format
+```
+
+## Visual OpenQA With Qwen3.6-35B-A3B And Unsloth
+
+`unsloth/Qwen3.6-35B-A3B` is a vision-capable MoE model with 35B total parameters and about 3B activated. This path is experimental and should be run only on a large GPU machine. Start detached, because downloading and training can take a long time.
+
+Run the full unattended pipeline:
+
+```bash
+hf auth login
+nohup bash scripts/run_openqa_qwen36_unsloth_full_pipeline.sh > qwen36_unsloth_openqa.nohup.log 2>&1 &
+tail -f qwen36_unsloth_openqa.nohup.log
+```
+
+The pipeline installs `requirements-unsloth-qwen36.txt`, trains a 300-step Unsloth QLoRA adapter, predicts the blinded test split, converts to official format, and validates the file. The final submission path is:
+
+```bash
+outputs/visual_openqa_qwen36_35b_a3b_unsloth_lora_300_lr3e5_test_official.json
+```
 
 ## Qwen3-VL-8B-Thinking Fine-Tuning
 
@@ -230,7 +418,7 @@ python scripts/run_visual_mcq_qwen3vl.py \
 Use a separate Lightning Studio if possible because Aya Vision requires a specific Transformers branch:
 
 ```bash
-pip install -r requirements-aya-vision.txt
+pip install -r requirements.txt
 hf auth login
 hf download CohereLabs/aya-vision-8b config.json --repo-type model --local-dir /tmp/aya-test
 ```
@@ -298,7 +486,7 @@ python scripts/run_visual_mcq_aya.py \
 Install:
 
 ```bash
-pip install -r requirements-minicpm-v.txt
+pip install -r requirements.txt
 ```
 
 Run a 500-example EXAMS-V test:
@@ -378,7 +566,7 @@ python scripts/run_visual_mcq_minicpm.py \
 Install in a fresh Lightning Studio if possible because the model card requires newer Torch/Transformers:
 
 ```bash
-pip install -r requirements-phi4vision.txt
+pip install -r requirements.txt
 ```
 
 Run a 500-example EXAMS-V test:
@@ -551,21 +739,11 @@ The strongest confirmed baseline so far is Qwen2.5-VL-7B with the EXAMS-V LoRA a
 - OCR/detail-focused solving
 - option verification/elimination
 
-The voting script can also run an enhanced image variant and inject external OCR text into the prompt. The safest optional OCR dependency on Lightning is EasyOCR:
+The voting script can also run an enhanced image variant and inject external OCR text into the prompt. For the current OCR.space workflow, install the base requirements:
 
 ```bash
-pip install -r requirements-ocr.txt
+pip install -r requirements.txt
 ```
-
-PaddleOCR is stronger in many document-style OCR settings and supports very broad multilingual recognition, but it has a heavier install stack. Use it only if the Lightning image supports it cleanly.
-
-DeepSeek-OCR is also supported as a stronger VLM-style OCR extractor. It is a 3B MIT-licensed Hugging Face model, so it is heavier than EasyOCR but can produce richer document Markdown:
-
-```bash
-pip install -r requirements-deepseek-ocr.txt
-```
-
-If your environment has FlashAttention installed, you can use `--deepseek-ocr-attn-implementation flash_attention_2`; otherwise keep the default `sdpa`.
 
 Try it first on a labeled EXAMS-V subset:
 
@@ -913,62 +1091,6 @@ python scripts/run_visual_mcq_internvl3.py \
   --split test \
   --image-variant enhanced \
   --output outputs/imageclef_visual_mcq_internvl3_8b_enhanced.json
-```
-
-### Two-Account DeepSeek-OCR Workflow
-
-Use this when DeepSeek-OCR needs a different Transformers version than Qwen2.5-VL.
-
-In the **DeepSeek-OCR-only Lightning account**:
-
-```bash
-git clone -b main https://github.com/Mohamedbasem1/MultimodalReasoning.git imageclef-mr2026
-cd imageclef-mr2026
-pip install -r requirements-deepseek-ocr.txt
-
-python scripts/extract_deepseek_ocr.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 100 \
-  --image-variant enhanced \
-  --output outputs/examsv_test_deepseek_ocr_100.jsonl
-```
-
-Download or copy `outputs/examsv_test_deepseek_ocr_100.jsonl` into the **Qwen Lightning account**, then run:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --limit 100 \
-  --num-prompts 1 \
-  --image-variants original \
-  --ocr-json outputs/examsv_test_deepseek_ocr_100.jsonl \
-  --output outputs/examsv_test_qwen25vl7b_deepseek_ocr_100.json
-```
-
-For the competition test set, extract OCR in the OCR account:
-
-```bash
-python scripts/extract_deepseek_ocr.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --image-variant enhanced \
-  --output outputs/imageclef_visual_mcq_deepseek_ocr.jsonl
-```
-
-Then use that OCR JSONL in the Qwen account:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --num-prompts 1 \
-  --image-variants original \
-  --ocr-json outputs/imageclef_visual_mcq_deepseek_ocr.jsonl \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_deepseek_ocr.json
 ```
 
 ## Zero-Shot Prediction
