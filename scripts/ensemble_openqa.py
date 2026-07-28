@@ -1,20 +1,20 @@
-﻿"""
+"""
 OpenQA Ensemble Script
 ======================
 Combines predictions from multiple VLMs using position-aware weighted voting.
 
 Models and their scores:
-  1. qwen3_32b   : 0.6270  â†’ weight 4.0
-  2. qwen3_8b    : 0.6093  â†’ weight 3.0
-  3. qwen25_32b  : 0.6125  â†’ weight 3.0
-  4. qwen36_35b  : 0.5663  â†’ weight 2.0
-  5. internvl3_8b: 0.4681  â†’ weight 1.0
+  1. qwen3_32b   : 0.6270  -> weight 4.0
+  2. qwen3_8b    : 0.6093  -> weight 3.0
+  3. qwen25_32b  : 0.6125  -> weight 3.0
+  4. qwen36_35b  : 0.5663  -> weight 2.0
+  5. internvl3_8b: 0.4681  -> weight 1.0
 
 Strategies implemented:
-  A) position_weighted  â€“ position-aware weighted voting (main strategy)
-  B) top2_union         â€“ qwen3_32b backbone enriched with qwen3_8b alternatives
-  C) weighted_union     â€“ all unique answers, ordered by model weight
-  D) qwen3_32b_only     â€“ baseline (best single model)
+  A) position_weighted  - position-aware weighted voting (main strategy)
+  B) top2_union         - qwen3_32b backbone enriched with qwen3_8b alternatives
+  C) weighted_union     - all unique answers, ordered by model weight
+  D) qwen3_32b_only     - baseline (best single model)
 """
 
 import json
@@ -23,7 +23,7 @@ import argparse
 from collections import Counter
 from pathlib import Path
 
-# â”€â”€â”€ Configuration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- Configuration -----------------------------------------------------------
 
 FILES = {
     "qwen3_32b":    "/mnt/user-data/uploads/openqa_qwen3vl32b_thinking_test_official.json",
@@ -33,7 +33,7 @@ FILES = {
     "internvl3_8b": "/mnt/user-data/uploads/openqa_internvl3_8b_hf_test_rerun_official.json",
 }
 
-# Scores â†’ normalized weights (softmax-like scaling)
+# Scores -> normalized weights (softmax-like scaling)
 MODEL_SCORES = {
     "qwen3_32b":    0.6270,
     "qwen3_8b":     0.6093,
@@ -50,7 +50,7 @@ MODEL_WEIGHTS = {k: math.exp(v * 10) for k, v in MODEL_SCORES.items()}
 _total = sum(MODEL_WEIGHTS.values())
 MODEL_WEIGHTS = {k: v / _total for k, v in MODEL_WEIGHTS.items()}
 
-# â”€â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- Utilities ----------------------------------------------------------------
 
 def clean_answer(ans: str) -> str:
     """Remove model artifacts and normalise whitespace."""
@@ -103,7 +103,7 @@ def get_clean_answers(data: dict, name: str, qid: str) -> list[str]:
     return [a for a in cleaned if a]  # drop empty strings
 
 
-# â”€â”€â”€ Strategy A: Position-Aware Weighted Voting â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- Strategy A: Position-Aware Weighted Voting -------------------------------
 
 def strategy_position_weighted(data: dict, qid: str) -> list[str]:
     """
@@ -148,7 +148,7 @@ def strategy_position_weighted(data: dict, qid: str) -> list[str]:
         if not candidates:
             break
 
-        # Single candidate â†’ take it
+        # Single candidate -> take it
         if len(candidates) == 1:
             ensemble.append(candidates[0][0])
             continue
@@ -161,7 +161,7 @@ def strategy_position_weighted(data: dict, qid: str) -> list[str]:
             for idx, (rep, best_w, total_w) in enumerate(clusters):
                 if jaccard(ans, rep) >= 0.35:
                     if weight > best_w:
-                        # Higher-weight model â†’ promote its answer as rep
+                        # Higher-weight model -> promote its answer as rep
                         clusters[idx] = (ans, weight, total_w + weight)
                     else:
                         clusters[idx] = (rep, best_w, total_w + weight)
@@ -177,7 +177,7 @@ def strategy_position_weighted(data: dict, qid: str) -> list[str]:
     return ensemble if ensemble else [""]
 
 
-# â”€â”€â”€ Strategy B: Top-2 Union â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- Strategy B: Top-2 Union --------------------------------------------------
 
 def strategy_top2_union(data: dict, qid: str) -> list[str]:
     """
@@ -205,7 +205,7 @@ def strategy_top2_union(data: dict, qid: str) -> list[str]:
 
         j_ps = jaccard(a_primary, a_secondary)
         if j_ps < 0.3:
-            # secondary differs â†’ check if tertiary supports secondary
+            # secondary differs -> check if tertiary supports secondary
             j_st = jaccard(a_secondary, a_tertiary)
             if j_st >= 0.3:
                 ensemble.append(a_secondary)  # two models agree against primary
@@ -217,7 +217,7 @@ def strategy_top2_union(data: dict, qid: str) -> list[str]:
     return ensemble if ensemble else [""]
 
 
-# â”€â”€â”€ Strategy C: Weighted Union â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- Strategy C: Weighted Union -----------------------------------------------
 
 def strategy_weighted_union(data: dict, qid: str) -> list[str]:
     """
@@ -239,7 +239,7 @@ def strategy_weighted_union(data: dict, qid: str) -> list[str]:
 
     target_n = count_vote.most_common(1)[0][0] if count_vote else 1
 
-    # Score pool: unique answer â†’ cumulative weight
+    # Score pool: unique answer -> cumulative weight
     scored: list[tuple[str, float]] = []
     for name, answers in all_answers.items():
         for ans in answers:
@@ -258,10 +258,10 @@ def strategy_weighted_union(data: dict, qid: str) -> list[str]:
     return top if top else [""]
 
 
-# â”€â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- Main ---------------------------------------------------------------------
 
 def run_ensemble(strategy: str, out_path: str) -> None:
-    print(f"Loading data â€¦")
+    print(f"Loading data ...")
     data = load_all()
     all_qids = list(data["qwen3_32b"].keys())
     print(f"  {len(all_qids)} questions across 6 languages\n")
@@ -289,11 +289,11 @@ def run_ensemble(strategy: str, out_path: str) -> None:
         count_stats[len(answers)] += 1
 
     print(f"Answer-count distribution: {dict(sorted(count_stats.items()))}")
-    print(f"Writing {len(results)} entries â†’ {out_path}")
+    print(f"Writing {len(results)} entries -> {out_path}")
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print("Done âœ“")
+    print("Done ")
 
 
 if __name__ == "__main__":
