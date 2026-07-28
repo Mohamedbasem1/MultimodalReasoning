@@ -1,18 +1,116 @@
-# ImageCLEF 2026 Visual MCQ Starter
+# FAU at ImageCLEF 2026 Multimodal Reasoning
 
-This repo starts a Visual MCQ baseline with `Qwen/Qwen2.5-VL-7B-Instruct`.
+This repository contains the FAU team system for the **ImageCLEF 2026 Task on Multimodal Reasoning**. We participated in both visual subtasks:
 
-The output format is the competition JSON:
+- **Visual MCQ**: choose one answer option from `A` to `E`.
+- **Visual OpenQA**: generate concise free-form answers from multilingual visual exam questions.
 
-```json
-[
-  {"question_id": "example_id", "answer_key": "A"}
-]
+Our final system is intentionally inference-focused. The strongest results came from controlling model outputs, scoring candidates directly, and combining complementary runs, rather than relying on raw generation or small task-specific fine-tuning.
+
+## Official Results
+
+### Visual MCQ
+
+FAU ranked **3rd** on the official Visual MCQ leaderboard.
+
+| Rank | Team | Overall | EN | BG | ZH | HR | IT | SR |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | spirosbax | 0.8406 | 0.8560 | 0.8909 | 0.7807 | 0.8772 | 0.9074 | 0.8704 |
+| 2 | DS@GT | 0.7986 | 0.8520 | 0.8636 | 0.6725 | 0.8596 | 0.8704 | 0.8333 |
+| **3** | **FAU** | **0.7108** | **0.7480** | **0.6909** | **0.6345** | **0.7368** | **0.8148** | **0.7593** |
+
+### Visual OpenQA
+
+FAU ranked **1st** on the official Visual OpenQA leaderboard by COMET.
+
+| Rank | Team | COMET | BG | ZH | HR | EN | IT | SR | BLEU | ROUGE-L | METEOR |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| **1** | **FAU** | **0.6488** | **0.6493** | **0.7287** | **0.6588** | **0.6499** | **0.6132** | **0.5838** | **0.1391** | **0.2762** | **0.2383** |
+| 2 | wangshou66 | 0.6366 | 0.6156 | 0.7012 | 0.6597 | 0.6519 | 0.5920 | 0.5929 | 0.1308 | 0.2717 | 0.2388 |
+| 3 | uned-martinez | 0.5938 | 0.5721 | 0.5985 | 0.6390 | 0.5942 | 0.5767 | 0.5804 | 0.0980 | 0.2452 | 0.1842 |
+
+## System Summary
+
+### MCQ: Candidate Label Scoring
+
+For multiple choice questions, free-form generation is fragile. A model may know the answer but still output a sentence, explanation, chain-of-thought, or malformed label. Our MCQ pipeline therefore scores the answer labels directly:
+
+1. Load the visual question image.
+2. Convert to RGB and resize/enhance the image.
+3. Apply a strict prompt with answer prefill: `ANSWER:`.
+4. Read next-token logits for labels `A`, `B`, `C`, `D`, and `E`.
+5. Store raw label scores.
+6. Fuse complementary score dictionaries or vote over final labels.
+7. Validate the official JSON format.
+
+The final submitted MCQ run was an ensemble over strong Qwen-family visual models. The best post-release local merge used weighted score fusion between the strongest two score-producing runs.
+
+### OpenQA: Concise Answer Generation and Answer-Level Ensembling
+
+OpenQA has no fixed answer set, so candidate label scoring is not possible. We instead used controlled generation:
+
+1. Load the visual question image and metadata.
+2. Enhance the image for readability.
+3. Use a concise no-reasoning prompt.
+4. Decode deterministically with a short maximum answer length.
+5. Remove reasoning traces, answer prefixes, XML-like tags, and duplicate whitespace.
+6. Combine cleaned answer lists from multiple models using COMET-weighted answer-level ensembling.
+
+The best OpenQA submission combined strong Qwen-family answer generators with position-weighted clustering, top-2 union, and weighted union variants.
+
+## Key Lessons
+
+- **MCQ should be scored, not generated.** Direct A-E logit scoring avoids brittle regex extraction from long explanations.
+- **OpenQA needs strict answer cleanup.** BLEU, ROUGE-L, METEOR, and COMET all suffer when outputs contain reasoning traces or extra text.
+- **OCR was not automatically helpful.** OCR.space recovered text for the datasets, but raw OCR often contained broken formulas, duplicated fragments, and incorrect reading order. Injecting it into prompts degraded both MCQ and OpenQA results.
+- **Small-data LoRA/QLoRA was not reliable.** Fine-tuned adapters generally underperformed the strongest direct inference runs.
+- **Ensembling helped when models were complementary.** Adding weak models blindly was less useful than merging strong, partially different predictors.
+
+## Repository Layout
+
+```text
+.
+|-- paper/                         # CEUR-WS system paper source and figures
+|-- prompts/                       # MCQ/OpenQA prompt templates
+|-- scripts/                       # Inference, evaluation, OCR, and ensemble scripts
+|-- Result/
+|   |-- MCQ/                       # Local MCQ predictions, scores, OCR, and eval summaries
+|   `-- OpenQA/                    # Local OpenQA predictions, OCR, and metric files
+|-- requirements.txt               # Base Qwen2.5/utility environment
+|-- requirements-qwen3vl.txt       # Qwen3-VL environment
+|-- requirements-unsloth-qwen36.txt# Unsloth/Qwen3.6 environment
+`-- requirements-huihui-mcq-ocr.txt
 ```
 
-## Setup
+`Result/` and `paper/` contain local artifacts and are intentionally not required for basic inference.
 
-Use a GPU machine if possible. The official task environment mentions an A40 40GB GPU; Qwen2.5-VL-7B can also run on smaller GPUs with careful settings, but CPU inference is not practical.
+## Datasets
+
+The project uses the following Hugging Face datasets:
+
+- `SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual`
+- `SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual`
+- `MBZUAI/EXAMS-V` for development and diagnostic fine-tuning
+
+Some ImageCLEF datasets are gated. Authenticate before running:
+
+```bash
+hf auth login
+```
+
+## Environment Setup
+
+Use a GPU machine. The final heavy runs were mainly executed on large-memory NVIDIA GPUs such as RTX PRO 6000 Blackwell or A100/L40S-class machines.
+
+```bash
+git clone https://github.com/Mohamedbasem1/MultimodalReasoning.git imageclef-mr2026
+cd imageclef-mr2026
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+On Windows PowerShell:
 
 ```powershell
 python -m venv .venv
@@ -20,1124 +118,451 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-If you see `KeyError: 'qwen2_5_vl'`, update Transformers from source:
-
-```powershell
-pip install -U git+https://github.com/huggingface/transformers accelerate
-```
-
-## Lightning AI Studio
-
-Recommended Studio GPU: use **L40S, A100, H100, or another GPU with at least 24GB VRAM**. If an A40 40GB option is available, that is closest to the official task environment. An L4 24GB may work for inference, but reduce `--max-pixels` if you hit out-of-memory errors.
-
-In a Lightning AI Studio terminal:
+Confirm CUDA:
 
 ```bash
-git clone <your-repo-url> imageclef-mr2026
-cd imageclef-mr2026
-pip install -r requirements.txt
-```
-
-If you uploaded this folder manually instead of cloning, just `cd` into the folder and run:
-
-```bash
-pip install -r requirements.txt
-```
-
-Confirm the Studio sees the GPU:
-
-```bash
-nvidia-smi
 python - <<'PY'
 import torch
-print(torch.cuda.is_available())
+print("CUDA:", torch.cuda.is_available())
 print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no cuda")
 PY
 ```
 
-Run a tiny smoke test first:
+On Windows PowerShell:
 
-```bash
-python scripts/run_visual_mcq_qwen25.py --limit 3 --output outputs/lightning_smoke.json
-python scripts/validate_mcq_submission.py outputs/lightning_smoke.json --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual --split test --allow-subset
+```powershell
+python -c "import torch; print('CUDA:', torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
 ```
 
-## Fine-Tuning On Lightning AI
+### Important Environment Note
 
-The competition Visual MCQ test split has no labels, so do **not** fine-tune on it. Fine-tune on the labeled EXAMS-V MCQ train split, validate on EXAMS-V validation, then run prediction on the competition Visual MCQ test split.
+The Qwen3-VL and Unsloth/Qwen3.6 stacks can require incompatible Torch/Transformers versions. Use separate environments when possible:
 
-Start with a very small training smoke test:
+- Base / Qwen2.5 / utilities: `requirements.txt`
+- Qwen3-VL: `requirements-qwen3vl.txt`
+- Unsloth Qwen3.6: `requirements-unsloth-qwen36.txt`
 
-```bash
-python scripts/train_visual_mcq_lora.py \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --train-limit 200 \
-  --eval-limit 50 \
-  --max-steps 20 \
-  --eval-steps 10 \
-  --save-steps 10 \
-  --output-dir outputs/qwen25vl7b-examsv-lora-smoke
-```
+This avoids the common problem where upgrading Torch/Transformers for Qwen3-VL breaks Unsloth, or installing Unsloth downgrades packages needed by Qwen3-VL.
 
-Then run a real LoRA/QLoRA fine-tune:
+## Prompt Files
 
-```bash
-python scripts/train_visual_mcq_lora.py \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --num-epochs 1 \
-  --eval-limit 300 \
-  --eval-steps 250 \
-  --save-steps 250 \
-  --output-dir outputs/qwen25vl7b-examsv-lora
-```
+| Prompt | Use |
+|---|---|
+| `prompts/visual_mcq_final_only.txt` | Strict final-letter MCQ prompt |
+| `prompts/visual_mcq_huihui_ocr_strict.txt` | MCQ OCR ablation prompt |
+| `prompts/visual_mcq_prompt.txt` | Earlier MCQ baseline prompt |
+| `prompts/visual_mcq_prompt_ocr.txt` | Earlier OCR prompt |
+| `prompts/visual_mcq_prompt_verify.txt` | Verification/elimination prompt |
+| `prompts/visual_mcq_weakcase_prompt.txt` | Weak-case fine-tuning prompt |
+| `prompts/visual_openqa_prompt.txt` | Main concise OpenQA prompt |
+| `prompts/visual_openqa_ocr_strict.txt` | OpenQA OCR ablation prompt |
 
-If you want to focus only on visually grounded training rows, add:
+## Output Formats
 
-```bash
---filter-type image_text
-```
-
-After fine-tuning, run the competition Visual MCQ prediction with the adapter:
-
-```bash
-python scripts/run_visual_mcq_qwen25.py \
-  --adapter outputs/qwen25vl7b-examsv-lora \
-  --output outputs/visual_mcq_qwen25vl7b_lora.json
-
-python scripts/validate_mcq_submission.py \
-  outputs/visual_mcq_qwen25vl7b_lora.json \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test
-```
-
-Submit `outputs/visual_mcq_qwen25vl7b_lora.json`.
-
-## Visual OpenQA With Qwen3-VL
-
-Visual OpenQA is a generative task: the model must produce a free-form answer instead of an `A/B/C/D/E` choice. The submission JSON uses:
+### Visual MCQ
 
 ```json
 [
-  {"question_id": "example_id", "answers": ["short answer text"], "language": "Bulgarian"}
+  {"question_id": "example_id", "answer_key": "A"}
 ]
 ```
 
-Install the Qwen3-VL dependencies:
+### Visual OpenQA
+
+```json
+[
+  {"question_id": "example_id", "answers": ["short answer text"]}
+]
+```
+
+Some intermediate OpenQA scripts may write `answer` instead of `answers`; use `scripts/convert_openqa_submission.py` to convert to the official format.
+
+## Quick Smoke Tests
+
+### MCQ
+
+```bash
+python scripts/run_visual_mcq_qwen25.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --limit 5 \
+  --image-variant enhanced \
+  --output outputs/mcq_smoke.json
+
+python scripts/validate_mcq_submission.py \
+  outputs/mcq_smoke.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --allow-subset
+```
+
+### OpenQA
 
 ```bash
 pip install -r requirements-qwen3vl.txt
-```
 
-Run a tiny prediction smoke test on the competition Visual OpenQA test split:
-
-```bash
 python scripts/run_visual_openqa_qwen3vl.py \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --split test \
   --limit 5 \
   --image-variant enhanced \
-  --output outputs/visual_openqa_qwen3vl_smoke.json
+  --output outputs/openqa_smoke.json
 
 python scripts/validate_openqa_submission.py \
-  outputs/visual_openqa_qwen3vl_smoke.json \
+  outputs/openqa_smoke.json \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --split test \
   --allow-subset
 ```
 
-Start with a small OpenQA QLoRA smoke run:
+## Reproducing MCQ Runs
+
+### Qwen3.6-35B-A3B Base Candidate Scoring
 
 ```bash
-python scripts/train_visual_openqa_lora_qwen3vl.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --train-split train \
-  --validation-from-train 100 \
-  --internal-test-split dev \
+pip install -r requirements-unsloth-qwen36.txt
+
+HF_HOME=$PWD/.hf_cache \
+HF_DATASETS_CACHE=$PWD/.hf_cache/datasets \
+HF_HUB_DISABLE_XET=1 \
+UNSLOTH_MOE_BACKEND=native_torch \
+PYTORCH_ALLOC_CONF=expandable_segments:True \
+python scripts/run_visual_mcq_qwen36_unsloth.py \
+  --model unsloth/Qwen3.6-35B-A3B \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
   --load-in-4bit \
-  --gradient-checkpointing \
-  --train-limit 200 \
-  --eval-limit 100 \
-  --internal-test-limit 50 \
-  --max-steps 20 \
-  --eval-steps 10 \
-  --save-steps 10 \
+  --selection-method logits \
+  --answer-prefill "ANSWER: " \
+  --prompt-file prompts/visual_mcq_final_only.txt \
   --image-variant enhanced \
-  --output-dir outputs/qwen3vl8b-thinking-openqa-lora-smoke
+  --enhance-longest-side 768 \
+  --output outputs/visual_mcq_qwen36_base_blind_test_logits.json
 ```
 
-The OpenQA prompt explicitly asks the model to learn the reference-answer structure: concise wording, same language when possible, correct units, exact numbers, and no extra sentence framing.
-
-Run a longer OpenQA LoRA:
+### Huihui-Qwen3.6-27B Candidate Scoring
 
 ```bash
-python scripts/train_visual_openqa_lora_qwen3vl.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --train-split train \
-  --validation-from-train 100 \
-  --internal-test-split dev \
+pip install -r requirements-huihui-mcq-ocr.txt
+
+HF_HOME=$PWD/.hf_cache \
+HF_DATASETS_CACHE=$PWD/.hf_cache/datasets \
+HF_HUB_DISABLE_XET=1 \
+PYTORCH_ALLOC_CONF=expandable_segments:True \
+python scripts/run_visual_mcq_gemma4.py \
+  --model sakamakismile/Huihui-Qwen3.6-27B-abliterated \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
   --load-in-4bit \
-  --gradient-checkpointing \
-  --max-steps 600 \
-  --learning-rate 3e-5 \
-  --eval-limit 100 \
-  --eval-steps 100 \
-  --save-steps 100 \
+  --selection-method logits \
+  --answer-prefill "ANSWER: " \
+  --prompt-file prompts/visual_mcq_final_only.txt \
   --image-variant enhanced \
-  --output-dir outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5
+  --enhance-longest-side 768 \
+  --output outputs/visual_mcq_huihui_qwen36_27b_abliterated_blind_test.json
 ```
 
-With `--validation-from-train 100`, the trainer shuffles the filtered train split using `--seed`, holds out 100 labeled train rows for validation, and trains on the rest. `--internal-test-split dev` scores the dev split after training, while the blinded `test` split is used only for the final prediction file.
+### Merge Raw MCQ Scores
 
-Predict the competition Visual OpenQA test split:
+Weighted score fusion was the strongest local MCQ merge. The best local merge used Huihui with weight `2.0` and Qwen3.6 base with weight `1.0`.
 
 ```bash
+python scripts/merge_mcq_raw_scores.py \
+  --inputs \
+    outputs/visual_mcq_huihui_qwen36_27b_abliterated_blind_test.raw.jsonl \
+    outputs/visual_mcq_qwen36_base_blind_test_logits.raw.jsonl \
+  --weights 2.0 1.0 \
+  --output outputs/visual_mcq_huihui2_qwen36base1_scoremerge_blind_test.json
+
+python scripts/validate_mcq_submission.py \
+  outputs/visual_mcq_huihui2_qwen36base1_scoremerge_blind_test.json \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test
+```
+
+### Evaluate MCQ Result Folder
+
+After the gold labels were released, use:
+
+```bash
+python scripts/evaluate_mcq_result_folder.py \
+  --result-dir Result/MCQ \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --json-output Result/MCQ/mcq_top_level_eval_summary.json \
+  --csv-output Result/MCQ/mcq_top_level_eval_summary.csv
+```
+
+The evaluator implements the leaderboard-compatible interpretation for multi-answer gold labels: a single predicted letter is counted correct if it is one of the accepted gold letters.
+
+## Reproducing OpenQA Runs
+
+### Qwen3-VL OpenQA
+
+```bash
+pip install -r requirements-qwen3vl.txt
+
+HF_HOME=$PWD/.hf_cache \
+HF_DATASETS_CACHE=$PWD/.hf_cache/datasets \
+HF_HUB_DISABLE_XET=1 \
 python scripts/run_visual_openqa_qwen3vl.py \
+  --model Qwen/Qwen3-VL-32B-Thinking \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --split test \
-  --adapter outputs/qwen3vl8b-thinking-openqa-lora-600-lr3e5 \
+  --split train \
+  --torch-dtype auto \
+  --max-new-tokens 192 \
   --image-variant enhanced \
-  --output outputs/visual_openqa_qwen3vl_lora_legacy.json
-
-python scripts/convert_openqa_submission.py \
-  outputs/visual_openqa_qwen3vl_lora_legacy.json \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --split test \
-  --split-answers \
-  --output outputs/visual_openqa_qwen3vl_lora.json
-
-python scripts/validate_openqa_submission.py \
-  outputs/visual_openqa_qwen3vl_lora.json \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --split test \
-  --official-format
+  --output outputs/openqa_qwen3vl32b_thinking_train_legacy.json \
+  --gold-output outputs/openqa_qwen3vl32b_thinking_train_gold.json
 ```
 
-## Visual OpenQA With Qwen2.5-VL
-
-This is a lighter OpenQA experiment using `Qwen/Qwen2.5-VL-7B-Instruct`. It uses the same answer-structure prompt as the Qwen3 OpenQA run, but without Qwen3 thinking-mode handling.
-
-Install the Qwen2.5-VL dependencies:
+Evaluate on the labeled train split:
 
 ```bash
-pip install -r requirements.txt
+python scripts/evaluate_openqa_predictions.py \
+  outputs/openqa_qwen3vl32b_thinking_train_legacy.json \
+  --gold-file outputs/openqa_qwen3vl32b_thinking_train_gold.json \
+  --output outputs/openqa_qwen3vl32b_thinking_train_metrics.json \
+  --verbose
 ```
 
-Run a small QLoRA smoke test first:
-
-```bash
-python scripts/train_visual_openqa_lora_qwen25vl.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --train-split train \
-  --validation-from-train 100 \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --train-limit 200 \
-  --eval-limit 100 \
-  --max-steps 20 \
-  --eval-steps 10 \
-  --save-steps 10 \
-  --image-variant enhanced \
-  --output-dir outputs/qwen25vl7b-instruct-openqa-lora-smoke
-```
-
-Run the longer OpenQA LoRA:
-
-```bash
-python scripts/train_visual_openqa_lora_qwen25vl.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --train-split train \
-  --validation-from-train 100 \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --max-steps 600 \
-  --learning-rate 3e-5 \
-  --eval-limit 100 \
-  --eval-steps 100 \
-  --save-steps 100 \
-  --image-variant enhanced \
-  --output-dir outputs/qwen25vl7b-instruct-openqa-lora-600-lr3e5
-```
-
-Predict and convert the blinded Visual OpenQA test split:
+### Qwen2.5-VL-32B OpenQA
 
 ```bash
 python scripts/run_visual_openqa_qwen25vl.py \
+  --model Qwen/Qwen2.5-VL-32B-Instruct \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-instruct-openqa-lora-600-lr3e5 \
+  --split train \
+  --torch-dtype auto \
+  --max-new-tokens 192 \
   --image-variant enhanced \
-  --output outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_legacy.json
+  --output outputs/openqa_qwen25vl32b_instruct_train_legacy.json \
+  --gold-output outputs/openqa_qwen25vl32b_instruct_train_gold.json
 
+python scripts/evaluate_openqa_predictions.py \
+  outputs/openqa_qwen25vl32b_instruct_train_legacy.json \
+  --gold-file outputs/openqa_qwen25vl32b_instruct_train_gold.json \
+  --output outputs/openqa_qwen25vl32b_instruct_train_metrics.json \
+  --verbose
+```
+
+### Convert OpenQA Predictions to Official Format
+
+```bash
 python scripts/convert_openqa_submission.py \
-  outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_legacy.json \
+  outputs/openqa_qwen3vl32b_thinking_test_legacy.json \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --split test \
   --split-answers \
-  --output outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_official.json
+  --output outputs/openqa_qwen3vl32b_thinking_test_official.json
 
 python scripts/validate_openqa_submission.py \
-  outputs/visual_openqa_qwen25vl_lora_600_lr3e5_test_official.json \
+  outputs/openqa_qwen3vl32b_thinking_test_official.json \
   --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
   --split test \
   --official-format
 ```
 
-## Visual OpenQA With Qwen3.6-35B-A3B And Unsloth
+### OpenQA Answer-Level Ensemble
 
-`unsloth/Qwen3.6-35B-A3B` is a vision-capable MoE model with 35B total parameters and about 3B activated. This path is experimental and should be run only on a large GPU machine. Start detached, because downloading and training can take a long time.
+The OpenQA ensemble combines official-format answer files after cleanup.
 
-Run the full unattended pipeline:
+```bash
+python scripts/ensemble_openqa.py \
+  --out outputs/ensemble_position_weighted.json \
+  --strategy position_weighted
+```
+
+Available strategies:
+
+- `position_weighted`: position-wise clustering with model weights.
+- `top2_union`: conservative replacement using top-model agreement.
+- `weighted_union`: recall-oriented pooling of unique answers.
+
+## OCR Experiments
+
+OCR was useful for diagnostics but not for the final submitted systems.
+
+Run OCR.space on a dataset:
+
+```bash
+python scripts/run_ocr_space_dataset.py \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --engine 2 \
+  --api-key "$OCR_SPACE_API_KEY" \
+  --output Result/MCQ/ocr_space_mcq_visual_test_engine2_merged_success.jsonl \
+  --summary-output Result/MCQ/ocr_space_mcq_visual_test_engine2_merged_success.summary.json
+```
+
+Use OCR in an MCQ ablation:
+
+```bash
+python scripts/run_visual_mcq_gemma4.py \
+  --model sakamakismile/Huihui-Qwen3.6-27B-abliterated \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
+  --split test \
+  --load-in-4bit \
+  --selection-method logits \
+  --answer-prefill "ANSWER: " \
+  --prompt-file prompts/visual_mcq_huihui_ocr_strict.txt \
+  --ocr-json Result/MCQ/ocr_space_mcq_visual_test_engine2_merged_success.jsonl \
+  --ocr-max-chars 2200 \
+  --image-variant enhanced \
+  --enhance-longest-side 768 \
+  --output outputs/visual_mcq_huihui_qwen36_27b_abliterated_ocr_prompt_test.json
+```
+
+Use OCR in an OpenQA ablation:
+
+```bash
+python scripts/run_visual_openqa_qwen3vl.py \
+  --model Qwen/Qwen3-VL-8B-Thinking \
+  --dataset SU-FMI-AI/ImageCLEF-MR2026-OpenQA-Visual \
+  --split train \
+  --prompt-file prompts/visual_openqa_ocr_strict.txt \
+  --ocr-json Result/OpenQA/ocr_space_openqa_visual_train_engine2_merged_success_v3.jsonl \
+  --ocr-max-chars 2600 \
+  --max-new-tokens 192 \
+  --image-variant enhanced \
+  --output outputs/openqa_qwen3vl8b_thinking_ocr_train_legacy.json \
+  --gold-output outputs/openqa_qwen3vl8b_thinking_ocr_train_gold.json
+```
+
+## Development Results
+
+### MCQ Single Models
+
+| Model | Size | Accuracy |
+|---|---:|---:|
+| Qwen3.6-35B-A3B base | 36.1B/A3B | 0.6849 |
+| Huihui-Qwen3.6-27B-abliterated | 27B | 0.6822 |
+| Qwen2.5-VL-32B | 32B | 0.6052 |
+| Qwen3.6-35B-A3B LoRA epoch 1 | 36.1B/A3B | 0.5801 |
+| Qwen3-VL-8B-Thinking direct | 8B | 0.5774 |
+| Qwen3-VL-8B-Thinking LoRA-300 | 8B | 0.5649 |
+| Huihui-Qwen3.6-27B with OCR prompt | 27B | 0.5542 |
+| Qwen3-VL-8B-Thinking with OCR prompt | 8B | 0.5103 |
+
+### MCQ Ensembles and Merges
+
+| Run | Method | Accuracy |
+|---|---|---:|
+| Huihui-Qwen3.6-27B + Qwen3.6-35B-A3B base | Weighted score fusion, weights 2.0/1.0 | 0.7126 |
+| Official FAU MCQ ensemble | Weighted voting / score fusion | 0.7108 |
+| Qwen3.6 base + Qwen3.6 LoRA | Weighted score fusion, weights 3.0/1.0 | 0.6885 |
+| Qwen3.6 base + Qwen3.6 LoRA | Confidence router | 0.6777 |
+| Three Qwen2.5-VL-7B variants | Majority vote | 0.5452 |
+
+### OpenQA Single Models on Train
+
+| Model | Size | BLEU | ROUGE-L | METEOR | COMET |
+|---|---:|---:|---:|---:|---:|
+| Qwen3-VL-32B-Thinking | 32B | 0.1076 | 0.1694 | 0.1514 | 0.6270 |
+| Qwen2.5-VL-32B-Instruct | 32B | 0.0973 | 0.1689 | 0.1488 | 0.6125 |
+| Qwen3-VL-8B-Thinking | 8B | 0.0848 | 0.1598 | 0.1274 | 0.6093 |
+| Qwen3.6-35B-A3B base | 36.1B/A3B | 0.0657 | 0.1418 | 0.1456 | 0.5663 |
+| InternVL3-8B-hf | 8B | 0.0326 | 0.1126 | 0.1030 | 0.4681 |
+| Aya Vision 32B | 32B | 0.0194 | 0.0664 | 0.0576 | 0.4667 |
+| Phi-4 Reasoning Vision | 15B | 0.0268 | 0.0815 | 0.0554 | 0.4344 |
+| Mistral Small FP8 | 24B | 0.0040 | 0.0200 | 0.0064 | 0.4248 |
+| InternVL3.5 38B | 38B | 0.0076 | 0.0369 | 0.0401 | 0.4150 |
+
+### OpenQA OCR Ablation on Train
+
+| Model | OCR | BLEU | ROUGE-L | METEOR | COMET |
+|---|---|---:|---:|---:|---:|
+| Qwen3-VL-32B-Thinking | No | 0.1076 | 0.1694 | 0.1514 | 0.6270 |
+| Qwen3-VL-32B-Thinking | Yes | 0.1040 | 0.1698 | 0.1264 | 0.6078 |
+| Qwen3-VL-8B-Thinking | No | 0.0848 | 0.1598 | 0.1274 | 0.6093 |
+| Qwen3-VL-8B-Thinking | Yes | 0.0857 | 0.1496 | 0.1110 | 0.6043 |
+
+## Paper
+
+The CEUR-WS system paper is in:
+
+```text
+paper/imageclef2026_mr_system.tex
+```
+
+Figures are exported as vector PDFs:
+
+```text
+paper/MCQ_Figure.pdf
+paper/OpenQA_Figure.pdf
+```
+
+## Troubleshooting
+
+### Gated dataset or model
 
 ```bash
 hf auth login
-nohup bash scripts/run_openqa_qwen36_unsloth_full_pipeline.sh > qwen36_unsloth_openqa.nohup.log 2>&1 &
-tail -f qwen36_unsloth_openqa.nohup.log
 ```
 
-The pipeline installs `requirements-unsloth-qwen36.txt`, trains a 300-step Unsloth QLoRA adapter, predicts the blinded test split, converts to official format, and validates the file. The final submission path is:
+Then confirm access:
 
 ```bash
-outputs/visual_openqa_qwen36_35b_a3b_unsloth_lora_300_lr3e5_test_official.json
+python - <<'PY'
+from datasets import load_dataset
+print(load_dataset("SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual", split="test"))
+PY
 ```
 
-## Qwen3-VL-8B-Thinking Fine-Tuning
+### Qwen3-VL import errors
 
-`Qwen/Qwen3-VL-8B-Thinking` is a stronger Normal-category experiment than the Tiny Qwen2.5-VL-7B baseline. It needs the newer Qwen3-VL Transformers code, so use a fresh Lightning Studio or reinstall Transformers before running it.
-
-Install the Qwen3-VL dependencies:
+Install the Qwen3-VL environment in a fresh virtual environment:
 
 ```bash
 pip install -r requirements-qwen3vl.txt
 ```
 
-Run a small QLoRA smoke test first:
+### Unsloth conflicts after installing Qwen3-VL
+
+Create a separate environment and install:
 
 ```bash
-python scripts/train_visual_mcq_lora_qwen3vl.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --prompt-file prompts/visual_mcq_final_only.txt \
-  --train-limit 200 \
-  --eval-limit 50 \
-  --max-steps 20 \
-  --eval-steps 10 \
-  --save-steps 10 \
-  --output-dir outputs/qwen3vl8b-thinking-examsv-lora-smoke
+pip install -r requirements-unsloth-qwen36.txt
 ```
 
-If the smoke run works, start with a 300-step run and compare against the current Qwen2.5-VL best score:
+### CUDA out of memory
 
-```bash
-python scripts/train_visual_mcq_lora_qwen3vl.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --prompt-file prompts/visual_mcq_final_only.txt \
-  --max-steps 300 \
-  --learning-rate 1e-4 \
-  --eval-limit 300 \
-  --eval-steps 100 \
-  --save-steps 100 \
-  --output-dir outputs/qwen3vl8b-thinking-examsv-lora-300
-```
-
-Evaluate it on the labeled EXAMS-V test split using the same enhanced-image setting that gave the best Qwen2.5-VL result:
-
-```bash
-python scripts/run_visual_mcq_qwen3vl.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen3vl8b-thinking-examsv-lora-300 \
-  --image-variant enhanced \
-  --output outputs/examsv_test_qwen3vl8b_thinking_lora_300_enhanced_full.json
-```
-
-Only run the competition test if it beats the current best EXAMS-V test score:
-
-```bash
-python scripts/run_visual_mcq_qwen3vl.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen3vl8b-thinking-examsv-lora-300 \
-  --image-variant enhanced \
-  --output outputs/imageclef_visual_mcq_qwen3vl8b_thinking_lora_enhanced.json
-
-python scripts/validate_mcq_submission.py \
-  outputs/imageclef_visual_mcq_qwen3vl8b_thinking_lora_enhanced.json \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test
-```
-
-### Qwen3 LoRA Checkpoint Soup
-
-After a longer Qwen3 run, average the saved LoRA checkpoints into one smoother adapter. This costs no extra training and can sometimes beat the final checkpoint:
-
-```bash
-python scripts/soup_lora_adapters.py \
-  --adapters \
-    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-300 \
-    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-400 \
-    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-500 \
-    outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5/checkpoint-600 \
-  --output-dir outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5-soup-300-600
-```
-
-Evaluate the soup on EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_qwen3vl.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5-soup-300-600 \
-  --image-variant enhanced \
-  --output outputs/examsv_test_qwen3vl8b_thinking_lora_600_lr5e5_soup_300_600_enhanced_full.json
-```
-
-If it beats the current best score, run the ImageCLEF test with the soup adapter:
-
-```bash
-python scripts/run_visual_mcq_qwen3vl.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen3vl8b-thinking-examsv-lora-600-lr5e5-soup-300-600 \
-  --image-variant enhanced \
-  --output outputs/imageclef_visual_mcq_qwen3vl8b_thinking_lora_600_lr5e5_soup_300_600_enhanced.json
-```
-
-## Aya Vision 8B Fine-Tuning
-
-`CohereLabs/aya-vision-8b` is a gated multilingual VLM. Before using it, accept the model terms on Hugging Face, log in from Lightning with a token from the same account, and confirm that the competition allows `CC-BY-NC-4.0` models.
-
-Use a separate Lightning Studio if possible because Aya Vision requires a specific Transformers branch:
-
-```bash
-pip install -r requirements.txt
-hf auth login
-hf download CohereLabs/aya-vision-8b config.json --repo-type model --local-dir /tmp/aya-test
-```
-
-Run a small QLoRA smoke test:
-
-```bash
-python scripts/train_visual_mcq_lora_aya.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --train-limit 200 \
-  --eval-limit 50 \
-  --max-steps 20 \
-  --eval-steps 0 \
-  --save-steps 10 \
-  --output-dir outputs/aya-vision-8b-examsv-lora-smoke
-```
-
-If the smoke run works, try a 300-step adapter:
-
-```bash
-python scripts/train_visual_mcq_lora_aya.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --max-steps 300 \
-  --learning-rate 1e-4 \
-  --eval-limit 300 \
-  --eval-steps 0 \
-  --save-steps 100 \
-  --output-dir outputs/aya-vision-8b-examsv-lora-300
-```
-
-Evaluate it on EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_aya.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/aya-vision-8b-examsv-lora-300 \
-  --image-variant enhanced \
-  --output outputs/examsv_test_aya_vision_8b_lora_300_enhanced_full.json
-```
-
-Only run the ImageCLEF test if it beats the current Qwen3 score:
-
-```bash
-python scripts/run_visual_mcq_aya.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/aya-vision-8b-examsv-lora-300 \
-  --image-variant enhanced \
-  --output outputs/imageclef_visual_mcq_aya_vision_8b_lora_300_enhanced.json
-```
-
-## MiniCPM-V 4.5 Inference
-
-`openbmb/MiniCPM-V-4_5` is an Apache-2.0 8.7B VLM built on Qwen3-8B with strong OCR, document parsing, and 30+ language support. Start with inference before spending GPU on fine-tuning.
-
-Install:
-
-```bash
-pip install -r requirements.txt
-```
-
-Run a 500-example EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_minicpm.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 500 \
-  --image-variant enhanced \
-  --max-new-tokens 32 \
-  --output outputs/examsv_test_minicpm_v45_enhanced_500.json
-```
-
-If MiniCPM loading fails with `all_tied_weights_keys`, pull the latest repo version. The runner disables Transformers low-memory/meta loading by default to avoid that compatibility path.
-
-If it is close to the current best, run the full EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_minicpm.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --image-variant enhanced \
-  --max-new-tokens 32 \
-  --output outputs/examsv_test_minicpm_v45_enhanced_full.json
-```
-
-Optional slower deep-thinking mode:
-
-```bash
-python scripts/run_visual_mcq_minicpm.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 500 \
-  --image-variant enhanced \
-  --enable-thinking \
-  --max-new-tokens 64 \
-  --output outputs/examsv_test_minicpm_v45_thinking_enhanced_500.json
-```
-
-### MiniCPM-V 4.5 Fine-Tuning
-
-MiniCPM-V scored poorly in zero-shot mode on EXAMS-V, so only run a short QLoRA smoke test before spending serious GPU time:
-
-```bash
-python scripts/train_visual_mcq_lora_minicpm.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --train-limit 200 \
-  --eval-limit 50 \
-  --max-steps 20 \
-  --eval-steps 10 \
-  --save-steps 10 \
-  --output-dir outputs/minicpm-v45-examsv-lora-smoke
-```
-
-If the smoke run finishes, evaluate the adapter quickly:
-
-```bash
-python scripts/run_visual_mcq_minicpm.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/minicpm-v45-examsv-lora-smoke \
-  --limit 500 \
-  --image-variant enhanced \
-  --max-new-tokens 32 \
-  --output outputs/examsv_test_minicpm_v45_lora_smoke_500.json
-```
-
-## Phi-4-Reasoning-Vision-15B Inference
-
-`microsoft/Phi-4-reasoning-vision-15B` is a 15B MIT-licensed VLM focused on visual reasoning, charts, OCR, documents, and STEM-style questions. Run inference first before considering LoRA.
-
-Install in a fresh Lightning Studio if possible because the model card requires newer Torch/Transformers:
-
-```bash
-pip install -r requirements.txt
-```
-
-Run a 500-example EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_phi4vision.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 500 \
-  --image-variant enhanced \
-  --reasoning-mode nothink \
-  --max-new-tokens 48 \
-  --output outputs/examsv_test_phi4_reasoning_vision_15b_nothink_enhanced_500.json
-```
-
-If it is close to the current Qwen3 best, try automatic reasoning mode:
-
-```bash
-python scripts/run_visual_mcq_phi4vision.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 500 \
-  --image-variant enhanced \
-  --reasoning-mode auto \
-  --max-new-tokens 128 \
-  --output outputs/examsv_test_phi4_reasoning_vision_15b_auto_enhanced_500.json
-```
-
-If either 500-example run beats the current Qwen3 score trend, run the full EXAMS-V test by removing `--limit`.
-
-### Phi-4 Fine-Tuning
-
-Phi-4's custom loader currently conflicts with bitsandbytes 4-bit casting, so train this on a larger GPU without `--load-in-4bit`. Start with a 20-step smoke run:
-
-```bash
-python scripts/train_visual_mcq_lora_phi4vision.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --gradient-checkpointing \
-  --train-limit 200 \
-  --eval-limit 50 \
-  --max-steps 20 \
-  --eval-steps 10 \
-  --save-steps 10 \
-  --image-variant enhanced \
-  --reasoning-mode nothink \
-  --output-dir outputs/phi4-reasoning-vision-15b-examsv-lora-smoke
-```
-
-Evaluate the smoke adapter on 500 labeled test rows:
-
-```bash
-python scripts/run_visual_mcq_phi4vision.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/phi4-reasoning-vision-15b-examsv-lora-smoke \
-  --limit 500 \
-  --image-variant enhanced \
-  --reasoning-mode nothink \
-  --max-new-tokens 48 \
-  --output outputs/examsv_test_phi4_reasoning_vision_15b_lora_smoke_500.json
-```
-
-If the smoke run improves over the zero-shot 28.2% sample, run a longer LoRA:
-
-```bash
-python scripts/train_visual_mcq_lora_phi4vision.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --gradient-checkpointing \
-  --max-steps 300 \
-  --learning-rate 5e-5 \
-  --eval-limit 300 \
-  --eval-steps 100 \
-  --save-steps 100 \
-  --image-variant enhanced \
-  --reasoning-mode nothink \
-  --output-dir outputs/phi4-reasoning-vision-15b-examsv-lora-300-lr5e5
-```
-
-Then evaluate the full labeled test:
-
-```bash
-python scripts/run_visual_mcq_phi4vision.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/phi4-reasoning-vision-15b-examsv-lora-300-lr5e5 \
-  --image-variant enhanced \
-  --reasoning-mode nothink \
-  --max-new-tokens 48 \
-  --output outputs/examsv_test_phi4_reasoning_vision_15b_lora_300_lr5e5_enhanced_full.json
-```
-
-## Second-Stage Weak-Case Fine-Tuning
-
-After error analysis, the weakest groups were Arabic/Urdu, `image_text`, graphs, tables, and lower grades. Continue training from the current best adapter instead of starting from scratch:
-
-```bash
-python scripts/train_visual_mcq_lora.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --init-adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --prompt-file prompts/visual_mcq_weakcase_prompt.txt \
-  --include-language Arabic Urdu \
-  --include-grade 9 10 11 \
-  --include-binary-columns graph table figure \
-  --weak-filter-mode or \
-  --max-steps 300 \
-  --learning-rate 5e-5 \
-  --eval-limit 300 \
-  --eval-steps 100 \
-  --save-steps 100 \
-  --output-dir outputs/qwen25vl7b-examsv-lora-weakstage
-```
-
-Optional narrower image-text-only variant:
-
-```bash
-python scripts/train_visual_mcq_lora.py \
-  --dataset MBZUAI/EXAMS-V \
-  --train-split train \
-  --eval-split validation \
-  --init-adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --load-in-4bit \
-  --gradient-checkpointing \
-  --prompt-file prompts/visual_mcq_weakcase_prompt.txt \
-  --filter-type image_text \
-  --max-steps 200 \
-  --learning-rate 5e-5 \
-  --eval-limit 300 \
-  --eval-steps 100 \
-  --save-steps 100 \
-  --output-dir outputs/qwen25vl7b-examsv-lora-imagetext-stage
-```
-
-Evaluate the weak-stage adapter with the current best enhanced direct pipeline:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-weakstage \
-  --num-prompts 1 \
-  --image-variants enhanced \
-  --output outputs/examsv_test_qwen25vl7b_weakstage_enhanced_full.json
-```
-
-If it beats `52.34%`, generate competition output:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-weakstage \
-  --num-prompts 1 \
-  --image-variants enhanced \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_weakstage_enhanced.json
-```
-
-## Voting Inference Enhancement
-
-The strongest confirmed baseline so far is Qwen2.5-VL-7B with the EXAMS-V LoRA adapter. To improve it without more training, use multi-prompt voting. This runs three prompt variants per image:
-
-- direct full-image solving
-- OCR/detail-focused solving
-- option verification/elimination
-
-The voting script can also run an enhanced image variant and inject external OCR text into the prompt. For the current OCR.space workflow, install the base requirements:
-
-```bash
-pip install -r requirements.txt
-```
-
-Try it first on a labeled EXAMS-V subset:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --limit 500 \
-  --output outputs/examsv_test_qwen25vl7b_voting_500.json
-
-python scripts/validate_mcq_submission.py \
-  outputs/examsv_test_qwen25vl7b_voting_500.json \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --allow-subset
-```
-
-Stronger OCR + image enhancement version:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --limit 500 \
-  --image-variants original enhanced \
-  --ocr-engine easyocr \
-  --ocr-langs en \
-  --ocr-on-enhanced \
-  --output outputs/examsv_test_qwen25vl7b_voting_ocr_500.json
-```
-
-For multilingual OCR experiments, add language codes supported by EasyOCR. Start small because every added language can download extra OCR weights:
-
-```bash
---ocr-langs en ar de es fr it pl hr hu ru
-```
-
-If voting beats the single-prompt result, run it on the competition test split:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --image-variants original enhanced \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting.json
-
-python scripts/validate_mcq_submission.py \
-  outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting.json \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test
-```
-
-For a faster version, use only two prompts:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --num-prompts 2 \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting2.json
-```
-
-OCR-enhanced competition run:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --image-variants original enhanced \
-  --ocr-engine easyocr \
-  --ocr-langs en \
-  --ocr-on-enhanced \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting_ocr.json
-```
-
-DeepSeek-OCR enhanced run:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --image-variants original enhanced \
-  --ocr-engine deepseek \
-  --ocr-on-enhanced \
-  --ocr-max-chars 2200 \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_voting_deepseek_ocr.json
-```
-
-If memory gets tight, add `--load-in-4bit` for Qwen or `--ocr-cpu` for the OCR model. DeepSeek-OCR on CPU is much slower, so prefer GPU when memory allows.
-
-## Error Analysis
-
-Use this after any labeled EXAMS-V run to see where the model fails. It reports answer bias, confusion matrix, metadata group accuracy, image-size buckets, and a sample of errors.
-
-```bash
-python scripts/analyze_mcq_errors.py \
-  outputs/examsv_test_qwen25vl7b_enhanced_full.json \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --raw-output outputs/examsv_test_qwen25vl7b_enhanced_full.raw.jsonl \
-  --output-dir outputs/error_analysis_qwen25vl7b_enhanced
-```
-
-Open:
-
-```bash
-outputs/error_analysis_qwen25vl7b_enhanced/summary.json
-outputs/error_analysis_qwen25vl7b_enhanced/errors.jsonl
-```
-
-## Conditional Self-Consistency
-
-This is a smarter version of voting for the current best model. It runs direct/OCR/verify prompts on the enhanced image. If all prompts agree, it keeps the answer. If they disagree, it runs one verifier prompt and uses that answer.
-
-```bash
-python scripts/run_visual_mcq_consistency.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --limit 500 \
-  --image-variant enhanced \
-  --agreement-policy unanimous_then_verifier \
-  --output outputs/examsv_test_qwen25vl7b_consistency_500.json
-```
-
-If it beats enhanced direct on 500, run the full EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_consistency.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --image-variant enhanced \
-  --agreement-policy unanimous_then_verifier \
-  --output outputs/examsv_test_qwen25vl7b_consistency_full.json
-```
-
-Competition consistency submission:
-
-```bash
-python scripts/run_visual_mcq_consistency.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --image-variant enhanced \
-  --agreement-policy unanimous_then_verifier \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_consistency.json
-```
-
-## Metadata Routing Ensemble
-
-The error analysis showed weaker performance on `image_text`, Arabic/Urdu, graphs, and tables. This router keeps the strongest direct enhanced predictions by default, but switches selected weak-case metadata rows to another prediction file, such as the multilingual prompt output.
-
-Run it on EXAMS-V first:
-
-```bash
-python scripts/route_mcq_predictions.py \
-  --primary outputs/examsv_test_qwen25vl7b_enhanced_full.json \
-  --secondary outputs/examsv_test_qwen25vl7b_multilingual_full.json \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --output outputs/examsv_test_qwen25vl7b_routed_multilingual.json \
-  --route-languages Arabic Urdu \
-  --route-types image_text \
-  --route-binary-columns graph table
-```
-
-If this beats the direct enhanced full score, generate the routed competition file after producing both competition prediction files:
-
-```bash
-python scripts/route_mcq_predictions.py \
-  --primary outputs/imageclef_visual_mcq_qwen25vl7b_lora_enhanced.json \
-  --secondary outputs/imageclef_visual_mcq_qwen25vl7b_lora_multilingual_enhanced.json \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_routed_multilingual.json \
-  --route-languages Arabic Urdu \
-  --route-types image_text \
-  --route-binary-columns graph table
-```
-
-## Candidate Scoring Enhancement
-
-For MCQ, a stronger alternative to generation is candidate scoring: compute the log probability of each answer letter (`A`-`E`) and choose the highest. This avoids parsing failures and can be more stable than asking the model to generate one token.
-
-Test on the same first 500 EXAMS-V test examples:
-
-```bash
-python scripts/run_visual_mcq_candidate_scoring.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --limit 500 \
-  --num-prompts 1 \
-  --image-variants original \
-  --output outputs/examsv_test_qwen25vl7b_scored_500.json
-```
-
-If this beats the direct generation baseline, run the full EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_candidate_scoring.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --num-prompts 1 \
-  --image-variants original \
-  --output outputs/examsv_test_qwen25vl7b_scored_full.json
-```
-
-Candidate scoring can also consume precomputed DeepSeek-OCR JSONL:
-
-```bash
-python scripts/run_visual_mcq_candidate_scoring.py \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --limit 100 \
-  --num-prompts 1 \
-  --image-variants original \
-  --ocr-json outputs/examsv_test_deepseek_ocr_100.jsonl \
-  --output outputs/examsv_test_qwen25vl7b_scored_deepseek_ocr_100.json
-```
-
-Competition candidate-scored submission:
-
-```bash
-python scripts/run_visual_mcq_candidate_scoring.py \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --num-prompts 1 \
-  --image-variants original \
-  --output outputs/imageclef_visual_mcq_qwen25vl7b_lora_scored.json
-```
-
-## Vero-Qwen25-7B Model Experiment
-
-`zlab-princeton/Vero-Qwen25-7B` is a Qwen2.5-VL-7B based visual reasoning model trained with RL across charts, OCR, STEM, spatial reasoning, grounding, and counting. Because it keeps the Qwen2.5-VL architecture, it can be tested with the same inference scripts.
-
-Run a quick 500-example test without the EXAMS-V LoRA adapter:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --model zlab-princeton/Vero-Qwen25-7B \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 500 \
-  --num-prompts 1 \
-  --prompt-files prompts/visual_mcq_final_only.txt \
-  --image-variants enhanced \
-  --max-new-tokens 64 \
-  --output outputs/examsv_test_vero_qwen25_7b_enhanced_500.json
-```
-
-If that beats the enhanced Qwen2.5-VL LoRA result on the same subset, run full EXAMS-V test:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --model zlab-princeton/Vero-Qwen25-7B \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --num-prompts 1 \
-  --prompt-files prompts/visual_mcq_final_only.txt \
-  --image-variants enhanced \
-  --max-new-tokens 64 \
-  --output outputs/examsv_test_vero_qwen25_7b_enhanced_full.json
-```
-
-Optional risky test: apply the EXAMS-V LoRA adapter on top of Vero. This may help or hurt because the adapter was trained on the base Qwen weights:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --model zlab-princeton/Vero-Qwen25-7B \
-  --adapter outputs/qwen25vl7b-examsv-lora-4k \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 500 \
-  --num-prompts 1 \
-  --prompt-files prompts/visual_mcq_final_only.txt \
-  --image-variants enhanced \
-  --max-new-tokens 64 \
-  --output outputs/examsv_test_vero_qwen25_7b_lora_enhanced_500.json
-```
-
-Competition Vero submission:
-
-```bash
-python scripts/run_visual_mcq_voting.py \
-  --model zlab-princeton/Vero-Qwen25-7B \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --num-prompts 1 \
-  --prompt-files prompts/visual_mcq_final_only.txt \
-  --image-variants enhanced \
-  --max-new-tokens 64 \
-  --output outputs/imageclef_visual_mcq_vero_qwen25_7b_enhanced.json
-```
-
-## InternVL3-8B Model Experiment
-
-`OpenGVLab/InternVL3-8B-hf` is the Hugging Face Transformers implementation of InternVL3-8B. It uses a Qwen2.5-7B language component with InternViT vision encoder and is Apache-2.0 licensed.
-
-Test on 500 EXAMS-V examples first:
-
-```bash
-python scripts/run_visual_mcq_internvl3.py \
-  --model OpenGVLab/InternVL3-8B-hf \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --limit 500 \
-  --image-variant enhanced \
-  --output outputs/examsv_test_internvl3_8b_enhanced_500.json
-```
-
-If memory is tight, add:
+Use one or more of:
 
 ```bash
 --load-in-4bit
+--image-variant enhanced
+--enhance-longest-side 768
 ```
 
-If it beats the Qwen2.5-VL-7B LoRA enhanced result, run full EXAMS-V test:
+Also set:
 
 ```bash
-python scripts/run_visual_mcq_internvl3.py \
-  --model OpenGVLab/InternVL3-8B-hf \
-  --dataset MBZUAI/EXAMS-V \
-  --split test \
-  --image-variant enhanced \
-  --output outputs/examsv_test_internvl3_8b_enhanced_full.json
+export PYTORCH_ALLOC_CONF=expandable_segments:True
 ```
 
-Competition InternVL3 submission:
+### Long jobs
+
+Run with `nohup` and tail the log:
 
 ```bash
-python scripts/run_visual_mcq_internvl3.py \
-  --model OpenGVLab/InternVL3-8B-hf \
-  --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual \
-  --split test \
-  --image-variant enhanced \
-  --output outputs/imageclef_visual_mcq_internvl3_8b_enhanced.json
+nohup python <script.py> <args> > run.log 2>&1 &
+tail -f run.log
 ```
 
-## Zero-Shot Prediction
+## Citation
 
-If you only want zero-shot prediction without fine-tuning:
+If you use this repository, please cite the ImageCLEF 2026 overview paper, the ImageCLEF 2026 Multimodal Reasoning task overview paper, and the FAU working-notes system paper.
 
-```bash
-python scripts/run_visual_mcq_qwen25.py --output outputs/visual_mcq_qwen25vl7b.json
-python scripts/validate_mcq_submission.py outputs/visual_mcq_qwen25vl7b.json --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual --split test
+```bibtex
+@inproceedings{ImageCLEFMultimodalReasoningTaskOverview2026,
+  title = {{O}verview of the {I}mage{CLEF} 2026 {T}ask on {M}ultimodal {R}easoning},
+  author = {Dimitrov, Dimitar and Hee, Ming Shan and Ahsan, Momina and Ahmad, Sarfraz and Zlatkova, Dimitrina and Pachov, Georgi and Xie, Zhuohan and Nakov, Preslav and Koychev, Ivan},
+  booktitle = {CLEF 2026 Working Notes},
+  series = {CEUR Workshop Proceedings},
+  year = {2026},
+  month = {September 21--24},
+  address = {Jena, Germany},
+  publisher = {CEUR-WS.org}
+}
 ```
-
-If memory is tight:
-
-```bash
-python scripts/run_visual_mcq_qwen25.py --max-pixels 1003520 --output outputs/visual_mcq_qwen25vl7b_lowres.json
-```
-
-## Smoke Test
-
-Run five Visual MCQ test rows:
-
-```powershell
-python scripts/run_visual_mcq_qwen25.py --limit 5 --output outputs/visual_mcq_smoke.json
-python scripts/validate_mcq_submission.py outputs/visual_mcq_smoke.json --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual --split test --allow-subset
-```
-
-## Full Visual MCQ Run
-
-```powershell
-python scripts/run_visual_mcq_qwen25.py --output outputs/visual_mcq_qwen25vl7b.json
-python scripts/validate_mcq_submission.py outputs/visual_mcq_qwen25vl7b.json --dataset SU-FMI-AI/ImageCLEF-MR2026-MCQ-Visual --split test
-```
-
-Submit `outputs/visual_mcq_qwen25vl7b.json` to the Visual MCQ leaderboard.
-
-## Local Development With Labels
-
-The official Visual MCQ test split has no labels. To estimate accuracy locally, use EXAMS-V validation:
-
-```powershell
-python scripts/run_visual_mcq_qwen25.py --dataset MBZUAI/EXAMS-V --split validation --filter-type image_text --limit 100 --output outputs/examsv_val_100.json
-python scripts/validate_mcq_submission.py outputs/examsv_val_100.json --dataset MBZUAI/EXAMS-V --split validation --filter-type image_text --allow-subset
-```
-
-## Useful Options
-
-- `--prompt-file prompts/visual_mcq_prompt.txt` changes the prompt without editing code.
-- `--max-pixels 1003520` controls visual resolution. Increase it if OCR misses small text; decrease it if memory is tight.
-- `--attn-implementation flash_attention_2` can speed up Linux GPU runs if FlashAttention is installed.
-- `--load-in-4bit` can reduce memory on Linux with bitsandbytes installed.
